@@ -80,8 +80,8 @@ media_scan --> project_create --> clip_add / clip_update / effect_add --> previe
   validation run `melt`. This project is developed against MLT 7.42. CI uses Ubuntu
   noble's packaged MLT (7.22), so a few MLT/Qt behaviours can differ there.
 - **A Qt platform for headless runs.** MLT's `kdenlivetitle` and `qtblend` need one even
-  when nothing is displayed; set `QT_QPA_PLATFORM=offscreen` when there is no X/Wayland
-  session (CI does this).
+  when nothing is displayed; use Xvfb (or `QT_QPA_PLATFORM=offscreen`) when
+  there is no X/Wayland session. CI runs the suite under Xvfb.
 - **`kdenlive`** (optional): only needed for `open_in_kdenlive` and for opening exported
   projects in the GUI. Tested with Kdenlive 26.08.3.
 - **Linux.** The process handling, path assumptions and GUI launching target POSIX
@@ -291,8 +291,7 @@ overlap rejection, profile/track changes, `.kdenlive` export and import (includi
 and audio gain), preview image counts and aspect ratio, render duration and sizing, and
 actual pixels (color clip, red clip, fade to black, visible title), plus audio peak,
 large requests and error handling. CI runs the same command on Python 3.9, 3.12 and 3.13,
-allows 20 minutes for the suite, and sets `QT_QPA_PLATFORM=offscreen` because the runner
-is headless.
+and runs it under Xvfb with a 4-minute hard timeout because the runner is headless.
 
 ## Troubleshooting
 

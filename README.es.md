@@ -87,8 +87,8 @@ media_scan --> project_create --> clip_add / clip_update / effect_add --> previe
   empaquetado en Ubuntu noble (7.22), así que algunos comportamientos de MLT/Qt pueden
   diferir allí.
 - **Una plataforma Qt para ejecuciones sin pantalla.** Los módulos `kdenlivetitle` y
-  `qtblend` de MLT la necesitan aunque no se muestre nada; define
-  `QT_QPA_PLATFORM=offscreen` cuando no haya sesión X/Wayland (CI lo hace).
+  `qtblend` de MLT la necesitan aunque no se muestre nada; usa Xvfb (o
+  `QT_QPA_PLATFORM=offscreen`) cuando no haya sesión X/Wayland. CI ejecuta la suite bajo Xvfb.
 - **`kdenlive`** (opcional): solo hace falta para `open_in_kdenlive` y para abrir
   proyectos exportados en la GUI. Probado con Kdenlive 26.08.3.
 - **Linux.** El manejo de procesos, las rutas y el lanzamiento de la GUI están pensados
@@ -306,8 +306,7 @@ pistas, la exportación e importación de `.kdenlive` (incluidos fundidos y gana
 audio), el número y el aspecto de las imágenes de previsualización, la duración y el
 tamaño del render, y píxeles reales (clip de color, clip rojo, fundido a negro, título
 visible), además del pico de audio, peticiones grandes y el manejo de errores. CI ejecuta
-el mismo comando con Python 3.9, 3.12 y 3.13, permite 20 minutos para la suite y define
-`QT_QPA_PLATFORM=offscreen` porque el runner no tiene pantalla.
+el mismo comando con Python 3.9, 3.12 y 3.13, y la ejecuta bajo Xvfb con un límite duro de 4 minutos porque el runner no tiene pantalla.
 
 ## Solución de problemas
 

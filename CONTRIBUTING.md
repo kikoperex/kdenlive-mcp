@@ -61,16 +61,15 @@ another directory and avoid collisions with parallel runs:
 KD_TEST_DIR="$(mktemp -d)/kdenlive-mcp-test" python3 tests/test_e2e.py
 ```
 
-CI runs the same command on Python 3.9, 3.12 and 3.13 with `ffmpeg`, `melt`
-and `libmltqt7` installed from apt. Please run it locally before opening a pull
+CI runs the same command on Python 3.9, 3.12 and 3.13 with `ffmpeg` and
+`melt` installed from apt (libmlt7 ships the Qt module). Please run it locally before opening a pull
 request; a targeted manual render is not a substitute for the suite.
 
-On a headless machine (no X/Wayland session) set `QT_QPA_PLATFORM=offscreen`
-before running the suite. MLT's `kdenlivetitle` and `qtblend` need a Qt platform
+On a headless machine (no X/Wayland session), run the suite under Xvfb. MLT's `kdenlivetitle` and `qtblend` need a Qt platform
 even though nothing is displayed:
 
 ```bash
-QT_QPA_PLATFORM=offscreen python3 tests/test_e2e.py
+xvfb-run -a python3 tests/test_e2e.py
 ```
 
 ## Coding guidelines
