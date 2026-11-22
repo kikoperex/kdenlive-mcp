@@ -10,7 +10,9 @@ keeping it portable and predictable.
   interpreter).
 - `ffmpeg` and `ffprobe` on `PATH`.
 - `melt`, the MLT command-line renderer used by the tests and by the server.
-  The package is called `melt` on Debian/Ubuntu, `mlt` on Arch and Fedora.
+  The package is called `melt` on Debian/Ubuntu, `mlt` on Arch and Fedora. The
+  full e2e suite runs against MLT 7.42 (Debian sid); Ubuntu 24.04's MLT 7.22 can
+  hang on some projects.
 
 ```bash
 # Debian / Ubuntu
@@ -50,9 +52,14 @@ python3 tests/test_e2e.py
 The suite has 120 checks and usually finishes in under a minute. It generates
 sample media with ffmpeg, talks to the server over stdio like a real MCP client,
 renders with `melt`, and checks pixels (fades, colour clips, titles, audio mix).
-It prints every check and exits non-zero on failure. CI runs the suite under
-Xvfb with a 4-minute hard timeout, so a local run that takes much longer than a
-minute or two is a regression, not just slow hardware.
+It prints every check and exits non-zero on failure. CI splits validation in
+two: a fast compatibility job runs `py_compile` and the server smoke tests on
+Python 3.9 and 3.13 without `melt`, and the full suite runs once in a Debian sid
+container with MLT 7.42 under Xvfb. The e2e job sets `KD_MELT_TIMEOUT=120` to
+bound every `melt` call and has a 5-minute hard timeout (a 300-second outer
+`timeout`), so a local run that takes much longer than a minute or two is a
+regression, not just slow hardware. Ubuntu 24.04 ships MLT 7.22, whose `melt`
+can hang on some projects, so it is not used for the render e2e.
 
 By default it works in `/tmp/kdenlive-mcp-test`. Set `KD_TEST_DIR` to use
 another directory and avoid collisions with parallel runs:
@@ -61,9 +68,10 @@ another directory and avoid collisions with parallel runs:
 KD_TEST_DIR="$(mktemp -d)/kdenlive-mcp-test" python3 tests/test_e2e.py
 ```
 
-CI runs the same command on Python 3.9, 3.12 and 3.13 with `ffmpeg` and
-`melt` installed from apt (libmlt7 ships the Qt module). Please run it locally before opening a pull
-request; a targeted manual render is not a substitute for the suite.
+The e2e job installs `ffmpeg` and `melt` from apt in the Debian sid container
+(MLT 7.42; the Qt module ships with the MLT package). Please run the suite
+locally before opening a pull request; a targeted manual render is not a
+substitute for the suite.
 
 On a headless machine (no X/Wayland session), run the suite under Xvfb. MLT's `kdenlivetitle` and `qtblend` need a Qt platform
 even though nothing is displayed:

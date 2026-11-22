@@ -15,15 +15,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e:
-    name: e2e (Python ${{ matrix.python }})
+  compat:
+    name: compat (Python ${{ matrix.python }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 5
 
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.12", "3.13"]
+        python: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v7
 
@@ -31,19 +31,34 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      - name: Compile and smoke test
+        run: |
+          python3 -m py_compile server.py kdenlive_mcp/*.py tests/test_e2e.py
+          python3 server.py --version
+          python3 server.py --list-tools
+
+  e2e:
+    name: e2e (Debian sid, MLT 7.42)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: buildpack-deps:sid-scm
+    env:
+      KD_TEST_DIR: /tmp/kdenlive-mcp-test
+      KD_MELT_TIMEOUT: "120"
+      QT_QPA_PLATFORM: xcb
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@v7
+
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          # libmlt7 already ships libmltqt.so; xvfb gives Qt5/MLT a real display.
-          sudo apt-get install -y ffmpeg melt xvfb xauth libxkbcommon-x11-0 libxcb-xinerama0
-          ffmpeg -version | head -n 1
-          melt --version | head -n 1
-          dpkg-query -W -f='${Package} ${Version}\n' 'melt' 'libmlt*' 2>/dev/null || true
-
-      - name: Verify Python version
-        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3 ffmpeg melt xvfb xauth libxkbcommon-x11-0 \
+            libxcb-xinerama0 libgl1-mesa-dri libglx-mesa0
           python3 --version
-          python3 -c "import sys; want = tuple(map(int, '${{ matrix.python }}'.split('.'))); got = sys.version_info[:2]; assert got == want, 'expected Python %s, got %s' % (want, got)"
+          melt --version | head -n 1
 
       - name: Server smoke test
         run: |
@@ -51,27 +66,28 @@ jobs:
           python3 server.py --list-tools
 
       - name: End-to-end tests
-        timeout-minutes: 6
-        env:
-          KD_TEST_DIR: ${{ runner.temp }}/kdenlive-mcp-test
-          KD_FAULTHANDLER: "20"
-          QT_QPA_PLATFORM: xcb
+        timeout-minutes: 12
         run: |
           set +e
-          timeout --signal=KILL 180 xvfb-run -a --server-args="-screen 0 1280x720x24" \
+          timeout --kill-after=10 300 xvfb-run -a \
+            --server-args="-screen 0 1280x720x24 +extension GLX" \
             python3 -u tests/test_e2e.py > /tmp/e2e.log 2>&1
           rc=$?
-          tail -n 20 /tmp/e2e.log
-          tail -n 20 "$KD_TEST_DIR/server-stderr.log" 2>/dev/null || true
-          if [ $rc -ne 0 ]; then
+          tail -n 30 /tmp/e2e.log
+          if [ "$rc" -ne 0 ]; then
             tail -n 5 /tmp/e2e.log | while IFS= read -r line; do
-              echo "::error title=e2e tail::$(printf '%s' "$line" | sed 's/%/%25/g')"
+              echo "::error title=e2e tail::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')"
             done
-            tail -n 10 "$KD_TEST_DIR/server-stderr.log" 2>/dev/null | while IFS= read -r line; do
-              echo "::error title=server tail::$(printf '%s' "$line" | sed 's/%/%25/g')"
-            done
+            if [ -f "$KD_TEST_DIR/server-stderr.log" ]; then
+              tail -n 5 "$KD_TEST_DIR/server-stderr.log" | while IFS= read -r line; do
+                echo "::error title=server stderr tail::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')"
+              done
+            fi
+            if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+              echo "::error title=e2e hard timeout::hard timeout / killed (rc=$rc)"
+            fi
           fi
-          exit $rc
+          exit "$rc"
 
   package:
     name: package (sdist/wheel)

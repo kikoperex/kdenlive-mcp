@@ -83,12 +83,13 @@ media_scan --> project_create --> clip_add / clip_update / effect_add --> previe
 - **`ffmpeg` y `ffprobe`** en `PATH`: sondeo de medios, extracción de fotogramas y
   medición de volumen.
 - **`melt`** (de MLT) en `PATH`: la compilación se hace en Python, pero el render y la
-  validación ejecutan `melt`. Este proyecto se desarrolla contra MLT 7.42. CI usa el MLT
-  empaquetado en Ubuntu noble (7.22), así que algunos comportamientos de MLT/Qt pueden
-  diferir allí.
+  validación ejecutan `melt`. Este proyecto se desarrolla contra MLT 7.42. La suite e2e
+  completa se ejecuta en Debian sid con MLT 7.42 bajo Xvfb. Ubuntu 24.04 trae MLT 7.22,
+  cuyo `melt` puede colgarse con algunos proyectos, así que no se usa para el e2e de
+  render; en su lugar hay un job rápido de compatibilidad con Python 3.9/3.13.
 - **Una plataforma Qt para ejecuciones sin pantalla.** Los módulos `kdenlivetitle` y
   `qtblend` de MLT la necesitan aunque no se muestre nada; usa Xvfb (o
-  `QT_QPA_PLATFORM=offscreen`) cuando no haya sesión X/Wayland. CI ejecuta la suite bajo Xvfb.
+  `QT_QPA_PLATFORM=offscreen`) cuando no haya sesión X/Wayland. CI ejecuta la suite completa bajo Xvfb.
 - **`kdenlive`** (opcional): solo hace falta para `open_in_kdenlive` y para abrir
   proyectos exportados en la GUI. Probado con Kdenlive 26.08.3.
 - **Linux.** El manejo de procesos, las rutas y el lanzamiento de la GUI están pensados
@@ -306,10 +307,15 @@ pistas, la exportación e importación de `.kdenlive` (incluidos fundidos y gana
 audio), el número y el aspecto de las imágenes de previsualización, la duración y el
 tamaño del render, y píxeles reales (clip de color, clip rojo, fundido a negro, título
 visible), además del pico de audio, peticiones grandes y el manejo de errores. CI ejecuta
-el mismo comando con Python 3.9, 3.12 y 3.13, y la ejecuta bajo Xvfb con un límite duro de 4 minutos porque el runner no tiene pantalla.
+la suite completa en un contenedor Debian sid con MLT 7.42 bajo Xvfb, con un límite duro
+de 5 minutos (un `timeout` exterior de 300 segundos) porque el runner no tiene pantalla.
+Un job aparte y rápido de compatibilidad compila y hace un smoke test del servidor con
+Python 3.9 y 3.13, sin `melt` ni la suite e2e.
 
 ## Solución de problemas
 
+- **`melt` se queda hacia el 96% y no termina (MLT 7.22/Ubuntu 24.04).** Pasa un
+  `timeout=` menor a la herramienta o usa MLT ≥ 7.42.
 - **`melt` termina con señal 11 (segfault).** Normalmente es el tamaño de salida, no la
   timeline. Usa dimensiones pares, preferiblemente múltiplos de 16: `320x180`, `640x360`,
   `1280x720`. `render` y `preview` ajustan los tamaños pedidos a una cantidad par de

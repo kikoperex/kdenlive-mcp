@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CI: full e2e on Debian sid/MLT 7.42, Python 3.9/3.13 compatibility job,
+  bounded melt calls; documented MLT 7.22 hang.
+
 ## [1.0.1] - 2026-11-22
 
 ### Added

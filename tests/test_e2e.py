@@ -62,7 +62,7 @@ class Client:
         # server while it is writing tracebacks, but the text is still available
         # when something actually goes wrong.
         self.err_path = os.path.join(WORK, "server-stderr.log")
-        self.err = open(self.err_path, "a+", encoding="utf-8")
+        self.err = open(self.err_path, "w", encoding="utf-8")
         self.p = subprocess.Popen([sys.executable, SRV], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=self.err, text=True,
                                   encoding="utf-8", errors="replace", env=env)
@@ -72,8 +72,7 @@ class Client:
         try:
             self.err.flush()
             self.err.seek(0)
-            text = self.err.read()
-            return text.decode("utf-8", "replace") if isinstance(text, bytes) else text
+            return self.err.read()
         except (OSError, ValueError):
             return ""
 
@@ -98,6 +97,8 @@ class Client:
         return self.read_response()
 
     def call(self, name, **args):
+        if name in ("validate", "render", "preview") and "timeout" not in args:
+            args["timeout"] = int(os.environ.get("KD_MELT_TIMEOUT", "120"))
         res = self.rpc("tools/call", {"name": name, "arguments": args})
         return res["result"]
 
@@ -228,13 +229,6 @@ def replace_playlist_producer(src, dst, track_name, producer):
 
 
 def main():
-    debug = os.environ.get("KD_FAULTHANDLER")
-    if debug:
-        try:
-            import faulthandler
-            faulthandler.dump_traceback_later(int(debug), repeat=False)
-        except (ImportError, ValueError):
-            pass
     if not work_dir_is_safe(WORK):
         print(f"refusing to delete unsafe workspace: {WORK!r}; set KD_TEST_DIR to an "
               f"absolute scratch path under {tempfile.gettempdir()} (or a basename "
@@ -246,8 +240,13 @@ def main():
     edl = os.path.join(WORK, "proj")
     pkg = subprocess.run([sys.executable, "-m", "kdenlive_mcp", "--version"],
                          cwd=os.path.dirname(HERE), capture_output=True, text=True)
+    version_file = os.path.join(os.path.dirname(HERE), "kdenlive_mcp", "__init__.py")
+    with open(version_file, encoding="utf-8") as fh:
+        version_match = re.search(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]",
+                                  fh.read(), re.MULTILINE)
+    expected_version = "kdenlive-mcp " + (version_match.group(1) if version_match else "")
     check("python3 -m kdenlive_mcp --version",
-          pkg.returncode == 0 and pkg.stdout.strip() == "kdenlive-mcp 1.0.1",
+          pkg.returncode == 0 and pkg.stdout.strip() == expected_version,
           pkg.stdout + pkg.stderr)
     c = Client()
     try:

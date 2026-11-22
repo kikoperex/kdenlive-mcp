@@ -77,11 +77,13 @@ media_scan --> project_create --> clip_add / clip_update / effect_add --> previe
 - **`ffmpeg` and `ffprobe`** on `PATH`: media probing, frame extraction and loudness
   measurement.
 - **`melt`** (from MLT) on `PATH`: compiling is done in Python, but rendering and
-  validation run `melt`. This project is developed against MLT 7.42. CI uses Ubuntu
-  noble's packaged MLT (7.22), so a few MLT/Qt behaviours can differ there.
+  validation run `melt`. This project is developed against MLT 7.42. The full e2e
+  suite runs on Debian sid with MLT 7.42 under Xvfb. Ubuntu 24.04 ships MLT 7.22,
+  whose `melt` can hang on some projects, so it is not used for the render e2e; a fast
+  Python 3.9/3.13 compatibility job runs on Ubuntu instead.
 - **A Qt platform for headless runs.** MLT's `kdenlivetitle` and `qtblend` need one even
   when nothing is displayed; use Xvfb (or `QT_QPA_PLATFORM=offscreen`) when
-  there is no X/Wayland session. CI runs the suite under Xvfb.
+  there is no X/Wayland session. CI runs the full suite under Xvfb.
 - **`kdenlive`** (optional): only needed for `open_in_kdenlive` and for opening exported
   projects in the GUI. Tested with Kdenlive 26.08.3.
 - **Linux.** The process handling, path assumptions and GUI launching target POSIX
@@ -290,11 +292,15 @@ The suite has 120 checks and usually finishes in under a minute. It verifies too
 overlap rejection, profile/track changes, `.kdenlive` export and import (including fades
 and audio gain), preview image counts and aspect ratio, render duration and sizing, and
 actual pixels (color clip, red clip, fade to black, visible title), plus audio peak,
-large requests and error handling. CI runs the same command on Python 3.9, 3.12 and 3.13,
-and runs it under Xvfb with a 4-minute hard timeout because the runner is headless.
+large requests and error handling. CI runs the full suite in a Debian sid container with
+MLT 7.42 under Xvfb, with a 5-minute hard timeout (a 300-second outer `timeout`) because
+the runner is headless. A separate fast compatibility job compiles and smoke-tests the
+server on Python 3.9 and 3.13 without `melt` or the e2e suite.
 
 ## Troubleshooting
 
+- **`melt` stops around 96% and never exits (MLT 7.22/Ubuntu 24.04).** Pass a smaller
+  `timeout=` to the tool or use MLT ≥ 7.42.
 - **`melt` exits with signal 11 (segfault).** This is usually the output size, not the
   timeline. Use even dimensions, preferably multiples of 16: `320x180`, `640x360`,
   `1280x720`. `render` and `preview` snap requested sizes to even pixel counts, but very
