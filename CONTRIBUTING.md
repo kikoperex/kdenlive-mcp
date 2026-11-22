@@ -50,9 +50,9 @@ python3 tests/test_e2e.py
 The suite has 120 checks and usually finishes in under a minute. It generates
 sample media with ffmpeg, talks to the server over stdio like a real MCP client,
 renders with `melt`, and checks pixels (fades, colour clips, titles, audio mix).
-It prints every check and exits non-zero on failure. CI allows 20 minutes for
-the suite and kills it after 900 seconds, so a local run that takes much longer
-than a minute or two is a regression, not just slow hardware.
+It prints every check and exits non-zero on failure. CI runs the suite under
+Xvfb with a 4-minute hard timeout, so a local run that takes much longer than a
+minute or two is a regression, not just slow hardware.
 
 By default it works in `/tmp/kdenlive-mcp-test`. Set `KD_TEST_DIR` to use
 another directory and avoid collisions with parallel runs:
