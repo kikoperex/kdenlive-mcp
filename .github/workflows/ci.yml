@@ -51,18 +51,18 @@ jobs:
           python3 server.py --list-tools
 
       - name: End-to-end tests
-        timeout-minutes: 8
+        timeout-minutes: 6
         env:
           KD_TEST_DIR: ${{ runner.temp }}/kdenlive-mcp-test
           QT_QPA_PLATFORM: xcb
         run: |
           set +e
-          set -o pipefail
-          timeout --signal=KILL 240 xvfb-run -a --server-args="-screen 0 1280x720x24" \
-            python3 -u tests/test_e2e.py 2>&1 | tee /tmp/e2e.log
+          timeout --signal=KILL 180 xvfb-run -a --server-args="-screen 0 1280x720x24" \
+            python3 -u tests/test_e2e.py > /tmp/e2e.log 2>&1
           rc=$?
+          tail -n 40 /tmp/e2e.log
           if [ $rc -ne 0 ]; then
-            tail -n 30 /tmp/e2e.log | while IFS= read -r line; do
+            tail -n 40 /tmp/e2e.log | while IFS= read -r line; do
               echo "::error title=e2e tail::$(printf '%s' "$line" | sed 's/%/%25/g')"
             done
           fi
