@@ -61,7 +61,8 @@ class Client:
         # stderr goes to a real temp file: a full pipe can no longer deadlock the
         # server while it is writing tracebacks, but the text is still available
         # when something actually goes wrong.
-        self.err = tempfile.TemporaryFile()
+        self.err_path = os.path.join(WORK, "server-stderr.log")
+        self.err = open(self.err_path, "a+", encoding="utf-8")
         self.p = subprocess.Popen([sys.executable, SRV], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=self.err, text=True,
                                   encoding="utf-8", errors="replace", env=env)
@@ -226,6 +227,13 @@ def replace_playlist_producer(src, dst, track_name, producer):
 
 
 def main():
+    debug = os.environ.get("KD_FAULTHANDLER")
+    if debug:
+        try:
+            import faulthandler
+            faulthandler.dump_traceback_later(int(debug), repeat=False)
+        except (ImportError, ValueError):
+            pass
     if not work_dir_is_safe(WORK):
         print(f"refusing to delete unsafe workspace: {WORK!r}; set KD_TEST_DIR to an "
               f"absolute scratch path under {tempfile.gettempdir()} (or a basename "

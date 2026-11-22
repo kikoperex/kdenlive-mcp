@@ -137,6 +137,13 @@ def _configure_stdio():
 
 def main():
     _configure_stdio()
+    _debug = os.environ.get("KD_FAULTHANDLER")
+    if _debug:
+        try:
+            import faulthandler
+            faulthandler.dump_traceback_later(int(_debug), repeat=False)
+        except (ImportError, ValueError):
+            pass
     if "--version" in sys.argv:
         print(f"{SERVER_NAME} {SERVER_VERSION}")
         return 0

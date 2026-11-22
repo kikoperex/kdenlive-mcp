@@ -54,16 +54,21 @@ jobs:
         timeout-minutes: 6
         env:
           KD_TEST_DIR: ${{ runner.temp }}/kdenlive-mcp-test
+          KD_FAULTHANDLER: "20"
           QT_QPA_PLATFORM: xcb
         run: |
           set +e
           timeout --signal=KILL 180 xvfb-run -a --server-args="-screen 0 1280x720x24" \
             python3 -u tests/test_e2e.py > /tmp/e2e.log 2>&1
           rc=$?
-          tail -n 40 /tmp/e2e.log
+          tail -n 20 /tmp/e2e.log
+          tail -n 20 "$KD_TEST_DIR/server-stderr.log" 2>/dev/null || true
           if [ $rc -ne 0 ]; then
-            tail -n 40 /tmp/e2e.log | while IFS= read -r line; do
+            tail -n 5 /tmp/e2e.log | while IFS= read -r line; do
               echo "::error title=e2e tail::$(printf '%s' "$line" | sed 's/%/%25/g')"
+            done
+            tail -n 10 "$KD_TEST_DIR/server-stderr.log" 2>/dev/null | while IFS= read -r line; do
+              echo "::error title=server tail::$(printf '%s' "$line" | sed 's/%/%25/g')"
             done
           fi
           exit $rc
