@@ -30,6 +30,7 @@ Facts this file relies on (verified against Kdenlive 26.08 / MLT 7.42):
 
 import math
 import os
+import tempfile
 import uuid as uuidlib
 import xml.sax.saxutils as sx
 
@@ -221,15 +222,18 @@ class Builder:
         self.bin_media[path] = (chain_id, bid)
         return chain_id
 
-    def _bin_props(self, path, info, bid, indent="  "):
+    def _bin_props(self, path, info, bid, indent="  ", duration=None):
         self.out.append(_prop("kdenlive:clipname", os.path.basename(path), indent))
         self.out.append(_prop("kdenlive:folderid", "-1", indent))
         self.out.append(_prop("kdenlive:id", str(bid), indent))
         self.out.append(_prop("kdenlive:clip_type", str(_clip_type(info)), indent))
         if os.path.exists(path):
             self.out.append(_prop("kdenlive:file_hash", media.file_hash(path), indent))
-        if info.get("duration"):
-            self.out.append(_prop("kdenlive:duration", self.tc(float(info["duration"])), indent))
+        # `duration` overrides the probed duration (images get the timeline clip's
+        # length); exactly one kdenlive:duration is emitted either way.
+        dur = duration if duration is not None else info.get("duration")
+        if dur:
+            self.out.append(_prop("kdenlive:duration", self.tc(float(dur)), indent))
         self.out.append(_prop("xml_retain", "1", indent))
 
     def _clip_producer(self, clip):
@@ -252,6 +256,7 @@ class Builder:
         bid = self.bin_id(path)
         pid = self.tid("producer")
         out_tc = self.tc(float(clip["in"]) + float(clip["duration"]))
+        out_tc_seconds = float(clip["in"]) + float(clip["duration"])
         self.out.append(f' <producer id="{pid}" in="{self.tc(0)}" out="{out_tc}">\n')
         self.out.append(_prop("length", out_tc))
         self.out.append(_prop("eof", "pause"))
@@ -263,10 +268,8 @@ class Builder:
             self.out.append(_prop("seekable", "1"))
             self.out.append(_prop("audio_index", "1" if info.get("has_audio") else "-1"))
             self.out.append(_prop("video_index", "0" if info.get("has_video") else "-1"))
-        self._bin_props(path, info, bid)
-        if info.get("is_image"):
-            # images have no intrinsic duration: hold them
-            self.out.append(_prop("kdenlive:duration", out_tc))
+        self._bin_props(path, info, bid,
+                        duration=(out_tc_seconds if info.get("is_image") else None))
         self._clip_filters(clip, info)
         self.out.append(" </producer>\n")
         return pid
@@ -284,7 +287,7 @@ class Builder:
         self.out.append(_prop("kdenlive:clipname", "Color Clip"))
         self.out.append(_prop("kdenlive:folderid", "-1"))
         self.out.append(_prop("kdenlive:id", str(bid)))
-        self.out.append(_prop("kdenlive:clip_type", "2"))
+        self.out.append(_prop("kdenlive:clip_type", "4"))
         self.out.append(_prop("kdenlive:duration", self.tc(dur)))
         self._clip_filters(clip, {"has_video": True, "has_audio": False})
         self.out.append(" </producer>\n")
@@ -342,15 +345,14 @@ class Builder:
     def _clip_filters(self, clip, info):
         fps = self.fps
         dur = float(clip["duration"])
-        fade_in = float(clip.get("fade_in") or 0)
-        fade_out = float(clip.get("fade_out") or 0)
+        fade_in, fade_out = _clamp_fades(clip, dur)
         # MLT's brightness `level` is a 0..1 multiplier (1 = untouched frame).
         if fade_in and (info.get("has_video") or clip["kind"] != "media"):
-            self._brightness_fade([(0, 0), (max(1, media.frames(fade_in, fps)), 1)])
+            self._brightness_fade([(0, 0), (max(1, media.frames(fade_in, fps)), 1)], dur)
         if fade_out and (info.get("has_video") or clip["kind"] != "media"):
-            start = max(0.0, dur - fade_out)
-            self._brightness_fade([(media.frames(start, fps), 1),
-                                   (max(1, media.frames(dur, fps) - 1), 0)])
+            last = max(1, media.frames(dur, fps) - 1)
+            start = max(0, last - max(1, media.frames(fade_out, fps)))
+            self._brightness_fade([(start, 1), (last, 0)], dur)
         if info.get("has_audio") and clip["kind"] == "media":
             gain = float(clip.get("gain", 1.0))
             if fade_in or fade_out or abs(gain - 1.0) > 1e-6:
@@ -362,10 +364,13 @@ class Builder:
             self.out.append(_prop("mlt_service", eff["service"], "   "))
             self.out.append("  </filter>\n")
 
-    def _brightness_fade(self, keyframes):
-        kf = ";".join(f"{f}={v}" for f, v in keyframes)
+    def _brightness_fade(self, keyframes, dur):
+        kf = _keyframes(keyframes, dur, self.fps)
+        if not kf:
+            return
+        body = ";".join(f"{f}={v}" for f, v in kf)
         self.out.append("  <filter>\n")
-        self.out.append(_prop("level", kf, "   "))
+        self.out.append(_prop("level", body, "   "))
         self.out.append(_prop("alpha", "1", "   "))
         self.out.append(_prop("mlt_service", "brightness", "   "))
         self.out.append("  </filter>\n")
@@ -385,13 +390,17 @@ class Builder:
         if fade_in:
             points.append((media.frames(fade_in, fps), db))
         if fade_out:
-            points.append((media.frames(max(0.0, dur - fade_out), fps), db))
+            start = max(0, last - max(1, media.frames(fade_out, fps)))
+            points.append((start, db))
             points.append((last, -100.0))
         elif points[-1][0] != last:
             points.append((last, points[-1][1]))
-        kf = ";".join(f"{f}={v:.2f}" for f, v in points)
+        kf = _keyframes(points, dur, fps)
+        if not kf:
+            return
+        body = ";".join(f"{f}={float(v):.2f}" for f, v in kf)
         self.out.append("  <filter>\n")
-        self.out.append(_prop("level", kf, "   "))
+        self.out.append(_prop("level", body, "   "))
         self.out.append(_prop("mlt_service", "volume", "   "))
         self.out.append("  </filter>\n")
 
@@ -554,6 +563,34 @@ class Builder:
         o.append(" </tractor>\n")
 
 
+def _clamp_fades(clip, duration):
+    """Clamp fades to the clip; scale both when they would overlap."""
+    dur = float(duration)
+    fade_in = max(0.0, float(clip.get("fade_in") or 0))
+    fade_out = max(0.0, float(clip.get("fade_out") or 0))
+    fade_in = min(fade_in, dur) if dur > 0 else 0.0
+    fade_out = min(fade_out, dur) if dur > 0 else 0.0
+    total = fade_in + fade_out
+    if total > dur and total > 0:
+        scale = dur / total
+        fade_in *= scale
+        fade_out *= scale
+    return fade_in, fade_out
+
+
+def _keyframes(points, duration, fps):
+    """Sort, dedupe (last wins) and clamp keyframe points to [0, duration]."""
+    limit = max(0, media.frames(duration, fps) - 1)
+    merged = {}
+    for frame, value in points:
+        try:
+            f = int(round(float(frame)))
+        except (TypeError, ValueError):
+            continue
+        merged[max(0, min(limit, f))] = value
+    return sorted(merged.items())
+
+
 def _first_audio_index(builder):
     """Tractor index of the first audio track (Kdenlive's audioTarget)."""
     tracks = builder._ordered_tracks()
@@ -579,7 +616,20 @@ def compile_edl(doc, path=None):
 def write_project(doc, out_path):
     out_path = os.path.abspath(os.path.expanduser(out_path))
     xml = compile_edl(doc, out_path)
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(xml)
+    directory = os.path.dirname(out_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    # write next to the target and rename, so a crash never leaves a half file
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".kdenlive-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(xml)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return out_path

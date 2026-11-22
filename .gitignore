@@ -7,6 +7,10 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+htmlcov/
+*.log
+.python-version
 build/
 dist/
 
@@ -18,7 +22,7 @@ dist/
 .sheet_tmp/
 *.tmp
 
-# Rendered media (keep anything under docs/)
+# Rendered media
 *.mp4
 *.mov
 *.mkv
@@ -26,9 +30,6 @@ dist/
 *.wav
 *.mp3
 *.m4a
-!docs/**/*.mp4
-!docs/**/*.gif
-!docs/**/*.webp
 
 # Editors / OS
 .DS_Store

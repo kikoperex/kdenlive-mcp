@@ -77,7 +77,11 @@ media_scan --> project_create --> clip_add / clip_update / effect_add --> previe
 - **`ffmpeg` and `ffprobe`** on `PATH`: media probing, frame extraction and loudness
   measurement.
 - **`melt`** (from MLT) on `PATH`: compiling is done in Python, but rendering and
-  validation run `melt`. This project is developed against MLT 7.42.
+  validation run `melt`. This project is developed against MLT 7.42. CI uses Ubuntu
+  noble's packaged MLT (7.22), so a few MLT/Qt behaviours can differ there.
+- **A Qt platform for headless runs.** MLT's `kdenlivetitle` and `qtblend` need one even
+  when nothing is displayed; set `QT_QPA_PLATFORM=offscreen` when there is no X/Wayland
+  session (CI does this).
 - **`kdenlive`** (optional): only needed for `open_in_kdenlive` and for opening exported
   projects in the GUI. Tested with Kdenlive 26.08.3.
 - **Linux.** The process handling, path assumptions and GUI launching target POSIX
@@ -92,7 +96,7 @@ The server has no Python dependencies, so cloning is enough:
 ```bash
 git clone https://github.com/kikoperex/kdenlive-mcp.git
 cd kdenlive-mcp
-python3 server.py --version       # kdenlive-mcp 1.0.0
+python3 server.py --version       # kdenlive-mcp 1.0.1
 python3 server.py --list-tools    # one tool name per line, 20 in total
 ```
 
@@ -103,11 +107,17 @@ launcher for the `kdenlive_mcp` package; the equivalent package entry point is
 
 ### With pipx or uvx
 
-The project ships a `pyproject.toml` with a `kdenlive-mcp` console script:
+The PyPI distribution is named **`kdenlive-mlt-mcp`** because the `kdenlive-mcp` name is
+already owned by another project. Installing that distribution still gives you the
+**`kdenlive-mcp` command** and the `kdenlive_mcp` package, so client configurations do
+not change. The project ships a `pyproject.toml` with that console script:
 
 ```bash
 # from a checkout
 pipx install .
+
+# from PyPI, once the kdenlive-mlt-mcp distribution is published
+pipx install kdenlive-mlt-mcp
 
 # or directly from Git, without a manual clone
 uvx --from git+https://github.com/kikoperex/kdenlive-mcp kdenlive-mcp
@@ -174,6 +184,10 @@ Rendering has two timeouts: the MCP client's per-request timeout (set it high en
 the whole call) and the tool's own subprocess timeout. `render` defaults to 7200 seconds
 and accepts `timeout`; `preview` defaults to 1800 seconds. For long renders, raise both.
 
+Tool calls are handled synchronously on the server's stdio loop. A long render blocks
+`ping`, cancellation and any other tool call until it finishes, so clients should raise
+their per-request timeout rather than expect to interrupt it.
+
 ## Tools
 
 | Tool | Purpose | Main arguments |
@@ -189,10 +203,10 @@ and accepts `timeout`; `preview` defaults to 1800 seconds. For long renders, rai
 | `clip_update` | Move, retime, trim, re-gain, fade or relabel a clip; can also move it to another track. Accepts the same timing fields as `clip_add`. | `edl`, `clip_id`, `track`, `start`, `duration`, `in`, `out`, `gain`, `fade_in`, `fade_out`, `label`, `title` |
 | `clip_remove` | Delete a clip from the timeline. | `edl`, `clip_id` |
 | `clip_split` | Split a clip at an absolute timeline position; both halves must be at least one frame. | `edl`, `clip_id`, `at` |
-| `effect_add` | Append a raw MLT filter to a clip, for example `brightness` with `{level: 0.8}` or `frei0r.cartoon`. Props are passed through unchanged. | `edl`, `clip_id`, `service`, `props` |
+| `effect_add` | Append a raw MLT filter to a clip, for example `brightness` with `{level: 0.8}` (1.0 is neutral) or `frei0r.cartoon`. Props are passed through unchanged. | `edl`, `clip_id`, `service`, `props` |
 | `effect_remove` | Remove all effects from a clip, or only one service. | `edl`, `clip_id`, `service` |
-| `preview` | Fast low-resolution render plus up to 24 frames returned as images. | `edl`, `times` or `count` (default 4), `width` (default 320), `inline`, `out` |
-| `render` | Render the timeline to H.264/AAC. CRF defaults to 20, preset to `medium`. | `edl`, `out`, `crf`, `preset`, `width` or `height` (the other is derived), `start`, `end`, `timeout` |
+| `preview` | Fast low-resolution render plus up to 24 frames returned as images. | `edl`, `times` (same time formats as below) or `count` (default 4), `width` (default 320), `inline`, `out`, `project_out` |
+| `render` | Render the timeline to H.264/AAC. CRF defaults to 20, preset to `medium`. `dry_run` compiles and returns the melt command without encoding. | `edl`, `out`, `crf`, `preset`, `width` or `height` (the other is derived), `start`, `end`, `timeout`, `project_out`, `dry_run` |
 | `validate` | Compile the project, check XML parsing and missing media, then run a full `melt` render to the null consumer. | `edl`, `out` (`.kdenlive` path) |
 | `export_kdenlive` | Compile the EDL into a `.kdenlive` project for the GUI. | `edl`, `out` |
 | `open_in_kdenlive` | Compile the project and launch it in the Kdenlive GUI. Requires `kdenlive` and a graphical session. | `edl`, `out` |
@@ -205,6 +219,8 @@ Relative to the EDL path, derived files are siblings:
 - `edit.edl.json` compiles to `edit.kdenlive`.
 - `render` writes `edit.mp4` unless `out` is given.
 - `preview` writes `edit.preview.mp4` unless `out` is given.
+- `render` and `preview` accept `project_out` to choose the compiled `.kdenlive` path;
+  `render` also accepts `dry_run` to compile and return the melt command without encoding.
 
 ## Time formats and semantics
 
@@ -218,7 +234,8 @@ Times may be numbers in seconds or strings in any of these forms:
 ```
 
 The EDL stores seconds as floats. Frame values are converted using the project's `fps`,
-and generated MLT timecodes are snapped to whole frames.
+and generated MLT timecodes are snapped to whole frames. `preview.times` accepts the same
+formats, as do `render`'s `start` and `end`.
 
 - `start` is the position on the timeline; `in` and `out` are positions in the source
   media. For a media clip, `duration` is the length on the timeline; when `out` is used,
@@ -269,12 +286,13 @@ The end-to-end test requires `ffmpeg`, `ffprobe` and `melt`. It generates 640x36
 media in `/tmp/kdenlive-mcp-test` (override with `KD_TEST_DIR`), starts `server.py`, and
 speaks newline-delimited JSON-RPC over stdio like a real client.
 
-The suite has 48+ checks and takes about two minutes. It verifies tool schemas, media
-probing/scanning, editing and overlap rejection, profile/track changes, `.kdenlive`
-export and import (including fades and audio gain), preview image counts and aspect
-ratio, render duration and sizing, and actual pixels (color clip, red clip, fade to
-black, visible title), plus audio peak, large requests and error handling. CI runs the
-same command on Python 3.9 and 3.12.
+The suite has 120 checks and usually finishes in under a minute. It verifies tool schemas, media probing/scanning, editing and
+overlap rejection, profile/track changes, `.kdenlive` export and import (including fades
+and audio gain), preview image counts and aspect ratio, render duration and sizing, and
+actual pixels (color clip, red clip, fade to black, visible title), plus audio peak,
+large requests and error handling. CI runs the same command on Python 3.9, 3.12 and 3.13,
+allows 20 minutes for the suite, and sets `QT_QPA_PLATFORM=offscreen` because the runner
+is headless.
 
 ## Troubleshooting
 
@@ -288,6 +306,8 @@ same command on Python 3.9 and 3.12.
 - **The MCP call times out during a render.** Raise the client's per-request timeout
   (`"timeout": 3600` or more in `mcp.json`) and, for very long jobs, pass a larger
   `timeout` to `render`. The tool's default is 7200 seconds; `preview` defaults to 1800.
+  Tool calls are synchronous, so a render also blocks `ping` and cancellation until it
+  returns.
 - **`required executable not found: melt`, `ffmpeg` or `ffprobe`.** Install MLT and
   FFmpeg and make sure their binaries are on `PATH` (the server also checks `/usr/bin`
   and `/sbin` for `melt`).
@@ -322,6 +342,13 @@ same command on Python 3.9 and 3.12.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report issues and submit changes. Run
 `python3 tests/test_e2e.py` before opening a pull request.
+
+## Security
+
+Report vulnerabilities privately through GitHub Security Advisories as described in
+[SECURITY.md](SECURITY.md), not in a public issue. The server runs `melt`, `ffmpeg` and
+(only for `open_in_kdenlive`) the Kdenlive GUI on client-supplied paths, so treat it as a
+local tool driven by a trusted client.
 
 ## License
 

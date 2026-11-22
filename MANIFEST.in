@@ -1,0 +1,17 @@
+# sdist-only extras. The wheel stays package-only (include-package-data = false).
+include LICENSE
+include README.md
+include README.es.md
+include CONTRIBUTING.md
+include CHANGELOG.md
+include SECURITY.md
+include pyproject.toml
+include server.py
+
+recursive-include tests *.py
+recursive-include .github/workflows *.yml
+include .github/dependabot.yml
+
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.pyo

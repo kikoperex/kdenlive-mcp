@@ -6,4 +6,4 @@ The package exposes an MCP server that edits video through an EDL JSON
 document and compiles it into a Kdenlive project rendered with melt.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"

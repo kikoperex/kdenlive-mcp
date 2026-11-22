@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kdenlive-mcp"
+name = "kdenlive-mlt-mcp"
 dynamic = ["version"]
 description = "MCP server for Kdenlive/MLT video editing: build timelines, render and preview frames"
 readme = "README.md"
@@ -19,8 +19,6 @@ classifiers = [
     "Operating System :: POSIX",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Video",
@@ -34,9 +32,16 @@ Homepage = "https://github.com/kikoperex/kdenlive-mcp"
 Repository = "https://github.com/kikoperex/kdenlive-mcp"
 Issues = "https://github.com/kikoperex/kdenlive-mcp/issues"
 Changelog = "https://github.com/kikoperex/kdenlive-mcp/blob/main/CHANGELOG.md"
+Security = "https://github.com/kikoperex/kdenlive-mcp/security/policy"
+Documentation = "https://github.com/kikoperex/kdenlive-mcp/blob/main/README.md"
+"Documentation (ES)" = "https://github.com/kikoperex/kdenlive-mcp/blob/main/README.es.md"
 
 [project.scripts]
 kdenlive-mcp = "kdenlive_mcp.server:main"
+
+[tool.setuptools]
+# Keep wheels package-only; sdist extras are declared in MANIFEST.in.
+include-package-data = false
 
 [tool.setuptools.dynamic]
 version = { attr = "kdenlive_mcp.__version__" }

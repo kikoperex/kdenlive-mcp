@@ -39,8 +39,14 @@ def log(message):
 
 
 def _tool_list():
-    return [{"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
-            for t in tools.TOOLS]
+    listed = []
+    for t in tools.TOOLS:
+        entry = {"name": t["name"], "description": t["description"],
+                 "inputSchema": t["inputSchema"]}
+        if "annotations" in t:
+            entry["annotations"] = t["annotations"]
+        listed.append(entry)
+    return listed
 
 
 HANDLERS = {t["name"]: t["handler"] for t in tools.TOOLS}
@@ -117,7 +123,20 @@ def _read_line():
     return "".join(parts), False
 
 
+def _configure_stdio():
+    """Force UTF-8 on the pipes so accented paths/titles never crash a request."""
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main():
+    _configure_stdio()
     if "--version" in sys.argv:
         print(f"{SERVER_NAME} {SERVER_VERSION}")
         return 0
@@ -127,34 +146,40 @@ def main():
         return 0
     log(f"ready {SERVER_VERSION} ({len(tools.TOOLS)} tools)")
 
-    while True:
-        line, too_long = _read_line()
-        if too_long:
-            log(f"request exceeds {MAX_LINE} bytes; discarded")
-            _write({"jsonrpc": "2.0", "id": None,
-                    "error": {"code": -32700,
-                              "message": f"parse error: request exceeds {MAX_LINE} bytes"}})
-            continue
-        if not line:
-            break
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError as exc:
-            log(f"bad json: {exc}")
-            _write({"jsonrpc": "2.0", "id": None,
-                    "error": {"code": -32700, "message": f"parse error: {exc}"}})
-            continue
-        if isinstance(msg, list):
-            responses = [r for r in (_handle_one(m) for m in msg) if r is not None]
-            if responses:
-                _write(responses)
-            continue
-        response = _handle_one(msg)
-        if response is not None:
-            _write(response)
+    try:
+        while True:
+            line, too_long = _read_line()
+            if too_long:
+                log(f"request exceeds {MAX_LINE} bytes; discarded")
+                _write({"jsonrpc": "2.0", "id": None,
+                        "error": {"code": -32700,
+                                  "message": f"parse error: request exceeds {MAX_LINE} bytes"}})
+                continue
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except (json.JSONDecodeError, RecursionError) as exc:
+                log(f"bad json: {exc}")
+                _write({"jsonrpc": "2.0", "id": None,
+                        "error": {"code": -32700, "message": f"parse error: {exc}"}})
+                continue
+            if isinstance(msg, list):
+                if not msg:
+                    _write(_invalid_request())
+                    continue
+                responses = [r for r in (_handle_one(m) for m in msg) if r is not None]
+                if responses:
+                    _write(responses)
+                continue
+            response = _handle_one(msg)
+            if response is not None:
+                _write(response)
+    except (BrokenPipeError, KeyboardInterrupt):
+        return 0
     return 0
 
 
@@ -163,17 +188,22 @@ def _write(payload):
     try:
         sys.stdout.write(json.dumps(payload, ensure_ascii=True, default=str) + "\n")
         sys.stdout.flush()
-    except (BrokenPipeError, UnicodeEncodeError) as exc:
+    except (OSError, UnicodeEncodeError) as exc:
         log(f"cannot write response: {exc}")
+
+
+def _invalid_request():
+    return {"jsonrpc": "2.0", "id": None,
+            "error": {"code": -32600, "message": "invalid request"}}
 
 
 def _handle_one(msg):
     if not isinstance(msg, dict):
-        return None
+        return _invalid_request()
     method = msg.get("method")
     msg_id = msg.get("id")
-    if method is None:
-        return None
+    if not isinstance(method, str):
+        return _invalid_request()
     try:
         result = dispatch(method, msg.get("params"))
     except NotImplementedError:
@@ -195,3 +225,7 @@ def _handle_one(msg):
     if msg_id is None:
         return None
     return {"jsonrpc": "2.0", "id": msg_id, "result": result}
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -4,6 +4,7 @@
 
 import base64
 import json
+import math
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -41,8 +42,35 @@ def _sibling(p, suffix, override=None):
     return _path(override or edlmod.derived(p, suffix))
 
 
+def _safe_output(edl_path, doc, out, what="output"):
+    """Resolve an output path, refusing to clobber the EDL or any input media."""
+    p = _path(out, what)
+    protected = [("project EDL", edl_path)]
+    protected += [("input media", m) for m in (doc.get("media") or {})]
+    target = os.path.normcase(os.path.realpath(p))
+    for label, item in protected:
+        try:
+            other = os.path.normcase(os.path.realpath(_path(item, label)))
+        except (ToolError, OSError, ValueError):
+            continue
+        if target == other:
+            raise ToolError(f"{what} {p} is the same file as the {label}; "
+                            f"choose another output path")
+    return p
+
+
 MAX_IMAGE_BYTES = 900_000
 MAX_FRAMES = 24
+MAX_TOTAL_IMAGE_BYTES = 6_000_000
+TIME_DESCRIPTION = "seconds, or '12.5s', '150f', 'HH:MM:SS.mmm'"
+
+
+def _time_schema(description=None):
+    text = description or "time"
+    if TIME_DESCRIPTION not in text:
+        text = f"{text} ({TIME_DESCRIPTION})"
+    return {"anyOf": [{"type": "number"}, {"type": "string"}],
+            "description": text}
 
 
 def _image_block(path, max_bytes=MAX_IMAGE_BYTES):
@@ -59,16 +87,26 @@ def _image_block(path, max_bytes=MAX_IMAGE_BYTES):
 def _result(text, images=()):
     blocks = [{"type": "text", "text": text}]
     skipped = 0
-    for p in list(images)[:MAX_FRAMES]:
-        b = _image_block(p)
-        if b:
-            blocks.append(b)
-        else:
+    used = 0
+    for i, p in enumerate(images):
+        if i >= MAX_FRAMES:
             skipped += 1
+            continue
+        b = _image_block(p)
+        if not b:
+            skipped += 1
+            continue
+        size = len(b["data"])
+        if used + size > MAX_TOTAL_IMAGE_BYTES:
+            skipped += 1
+            continue
+        used += size
+        blocks.append(b)
     if skipped:
         blocks.append({"type": "text",
-                       "text": f"({skipped} frame(s) omitted: too large or unreadable; "
-                               f"retry with a smaller width)"})
+                       "text": f"({skipped} frame(s) omitted: too large, unreadable, "
+                               f"or over the {MAX_TOTAL_IMAGE_BYTES // 1_000_000} MB image "
+                               f"budget; retry with a smaller width or fewer frames)"})
     return blocks
 
 
@@ -79,13 +117,14 @@ def project_create(a):
         value = a.get(key)
         return default if value is None else float(value)
 
+    p = edlmod.path_of(_path(a.get("path")))
     try:
-        doc = edlmod.new(_path(a.get("path")), width=int(num("width", 1920)),
+        doc = edlmod.new(p, width=int(num("width", 1920)),
                          height=int(num("height", 1080)), fps=num("fps", 25),
-                         name=a.get("name"), profile=a.get("profile"))
+                         name=a.get("name"), profile=a.get("profile"),
+                         overwrite=bool(a.get("overwrite")))
     except (edlmod.EdlError, ValueError) as exc:
         raise ToolError(str(exc))
-    p = edlmod.path_of(a["path"])
     return f"EDL created: {p}\n\n{edlmod.summarize(doc)}"
 
 
@@ -97,12 +136,23 @@ def project_show(a):
 def project_set_profile(a):
     doc, p = _edl(a.get("edl"))
     prof = doc["profile"]
-    for key, cast in (("width", int), ("height", int), ("fps", float)):
-        if a.get(key) is not None:
-            prof[key] = cast(a[key])
-    if a.get("progressive") is not None:
-        prof["progressive"] = bool(a["progressive"])
-    _save(doc, p)
+    try:
+        for key in ("width", "height"):
+            if a.get(key) is not None:
+                value = int(a[key])
+                if value <= 0 or value % 2:
+                    raise ValueError(f"{key} must be a positive even number")
+                prof[key] = value
+        if a.get("fps") is not None:
+            value = float(a["fps"])
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("fps must be a finite number > 0")
+            prof["fps"] = value
+        if a.get("progressive") is not None:
+            prof["progressive"] = bool(a["progressive"])
+        _save(doc, p)
+    except (edlmod.EdlError, ValueError, TypeError) as exc:
+        raise ToolError(str(exc))
     f = edlmod.fps(doc)
     return f"profile now {prof['width']}x{prof['height']} @ {f:g} fps ({p})"
 
@@ -112,11 +162,13 @@ def media_probe(a):
     if not paths:
         raise ToolError("give path or paths")
     out = []
-    for p in paths:
+    for item in paths:
+        p = _path(item, "path")
         try:
-            info = media.probe(_path(p, "path"))
+            info = media.probe(p)
         except media.MediaError as exc:
-            raise ToolError(str(exc))
+            out.append(f"{p} error: {exc}")
+            continue
         out.append(_fmt_media(info))
     return "\n".join(out)
 
@@ -146,7 +198,16 @@ def media_scan(a):
         raise ToolError(str(exc))
     if not items:
         return "no media found"
-    return "\n".join(_fmt_media(i) for i in items)
+    try:
+        limit = 1000 if a.get("limit") is None else int(a["limit"])
+    except (TypeError, ValueError):
+        raise ToolError("limit must be a positive integer")
+    if limit <= 0:
+        raise ToolError("limit must be a positive integer")
+    lines = [_fmt_media(i) for i in items[:limit]]
+    if len(items) > limit:
+        lines.append(f"(showing {limit} of {len(items)} files; raise limit to see more)")
+    return "\n".join(lines)
 
 
 def track_add(a):
@@ -163,10 +224,12 @@ def track_remove(a):
     doc, p = _edl(a.get("edl"))
     tid = a.get("track")
     if any(t["id"] == tid for t in doc["tracks"]):
+        removed = len([c for c in doc["clips"] if c["track"] == tid])
         doc["tracks"] = [t for t in doc["tracks"] if t["id"] != tid]
         doc["clips"] = [c for c in doc["clips"] if c["track"] != tid]
         _save(doc, p)
-        return f"track {tid} removed (with its clips)\n\n{edlmod.summarize(doc)}"
+        return (f"track {tid} removed with {removed} clip(s)\n\n"
+                f"{edlmod.summarize(doc)}")
     raise ToolError(f"unknown track {tid}")
 
 
@@ -202,7 +265,7 @@ def clip_update(a):
         raise ToolError("nothing to update")
     try:
         clip = edlmod.update(doc, a.get("clip_id"), **fields)
-    except edlmod.EdlError as exc:
+    except (edlmod.EdlError, media.MediaError) as exc:
         raise ToolError(str(exc))
     _save(doc, p)
     return f"clip {clip['id']} updated\n\n{edlmod.summarize(doc)}"
@@ -230,21 +293,38 @@ def clip_split(a):
 
 def effect_add(a):
     doc, p = _edl(a.get("edl"))
-    eff = edlmod.add_effect(doc, a.get("clip_id"), a.get("service"), a.get("props"))
+    try:
+        eff = edlmod.add_effect(doc, a.get("clip_id"), a.get("service"), a.get("props"))
+    except (edlmod.EdlError, media.MediaError) as exc:
+        raise ToolError(str(exc))
+    clip = edlmod.find(doc, a.get("clip_id"))
+    index = len(clip.get("effects", [])) - 1
     _save(doc, p)
-    return f"effect {eff['service']} added to {a['clip_id']}"
+    props = json.dumps(eff.get("props") or {}, ensure_ascii=False, sort_keys=True)
+    return (f"effect {index} added to {clip['id']}: {eff['service']} {props}")
 
 
 def effect_remove(a):
     doc, p = _edl(a.get("edl"))
-    n = edlmod.remove_effects(doc, a.get("clip_id"), a.get("service"))
+    kwargs = {}
+    if a.get("effect_index") is not None:
+        try:
+            kwargs["index"] = int(a["effect_index"])
+        except (TypeError, ValueError):
+            raise ToolError("effect_index must be a non-negative integer")
+        if kwargs["index"] < 0:
+            raise ToolError("effect_index must be a non-negative integer")
+    try:
+        n = edlmod.remove_effects(doc, a.get("clip_id"), a.get("service"), **kwargs)
+    except (edlmod.EdlError, media.MediaError) as exc:
+        raise ToolError(str(exc))
     _save(doc, p)
     return f"{n} effect(s) removed from {a['clip_id']}"
 
 
 def export_kdenlive(a):
     doc, p = _edl(a.get("edl"))
-    out = _sibling(p, ".kdenlive", a.get("out"))
+    out = _safe_output(p, doc, _sibling(p, ".kdenlive", a.get("out")), "out")
     try:
         path = xmlgen.write_project(doc, out)
     except Exception as exc:  # noqa: BLE001 - surfaced to the model
@@ -254,21 +334,36 @@ def export_kdenlive(a):
 
 def validate(a):
     doc, p = _edl(a.get("edl"))
-    out = _sibling(p, ".kdenlive", a.get("out"))
-    path = xmlgen.write_project(doc, out)
+    out = _safe_output(p, doc, _sibling(p, ".kdenlive", a.get("out")), "out")
+    try:
+        timeout = 900 if a.get("timeout") is None else int(a["timeout"])
+    except (TypeError, ValueError):
+        raise ToolError("timeout must be a positive integer")
+    if timeout <= 0:
+        raise ToolError("timeout must be a positive integer")
+    try:
+        path = xmlgen.write_project(doc, out)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the model
+        raise ToolError(f"could not build project: {exc}")
     try:
         ET.parse(path)
     except ET.ParseError as exc:
         raise ToolError(f"generated XML is not well formed: {exc}")
     missing = sorted({c["media"] for c in doc["clips"]
                       if c.get("kind") == "media" and not os.path.exists(c["media"])})
-    check = render.melt_check(path)
     lines = [f"project: {path}",
              f"xml: ok ({os.path.getsize(path)} bytes)",
              f"timeline: {edlmod.timeline_duration(doc):.2f}s, {len(doc['clips'])} clip(s)"]
     if missing:
         lines.append("missing media:")
         lines += ["  " + m for m in missing]
+    if a.get("skip_melt"):
+        lines.append("melt: skipped (skip_melt=true)")
+        return "\n".join(lines)
+    try:
+        check = render.melt_check(path, timeout=timeout)
+    except media.MediaError as exc:
+        raise ToolError(str(exc))
     lines.append(f"melt: {'ok' if check['ok'] else 'FAILED'} (rc={check['returncode']})")
     if check["problems"]:
         lines.append("problems:")
@@ -276,9 +371,9 @@ def validate(a):
     return "\n".join(lines)
 
 
-def _even(value):
-    """Snap a size to an even pixel count (libx264 requires even dimensions)."""
-    return max(2, int(round(float(value) / 2.0)) * 2)
+def _even4(value):
+    """Snap a size to a multiple of 4 (libx264/yuv420p needs 4-aligned sizes)."""
+    return max(4, int(round(float(value) / 4.0)) * 4)
 
 
 def _render_size(doc, width, height):
@@ -286,51 +381,119 @@ def _render_size(doc, width, height):
     prof = doc["profile"]
     pw, ph = float(prof["width"]), float(prof["height"])
     if width is not None and height is None:
-        width = _even(width)
-        height = _even(width * ph / pw)
+        width = _even4(width)
+        height = _even4(width * ph / pw)
     elif height is not None and width is None:
-        height = _even(height)
-        width = _even(height * pw / ph)
+        height = _even4(height)
+        width = _even4(height * pw / ph)
     elif width is not None and height is not None:
-        width, height = _even(width), _even(height)
+        width, height = _even4(width), _even4(height)
     return width, height
 
 
 def render_project(a):
     doc, p = _edl(a.get("edl"))
-    project = xmlgen.write_project(doc, _sibling(p, ".kdenlive", a.get("project_out")))
-    out = _sibling(p, ".mp4", a.get("out"))
-    width, height = _render_size(doc, a.get("width") or None, a.get("height") or None)
+    fps = edlmod.fps(doc)
+    total = edlmod.timeline_duration(doc)
+    project_out = _safe_output(p, doc, _sibling(p, ".kdenlive", a.get("project_out")),
+                               "project_out")
+    out = _safe_output(p, doc, _sibling(p, ".mp4", a.get("out")), "out")
+    if os.path.realpath(out) == os.path.realpath(project_out):
+        raise ToolError("out and project_out must be different paths")
+    try:
+        start = media.parse_time(a.get("start"), fps)
+        end = media.parse_time(a.get("end"), fps)
+    except media.MediaError as exc:
+        raise ToolError(str(exc))
+    if start is None:
+        start = 0.0
+    if end is None:
+        end = total
+    tolerance = 1.0 / fps + 1e-9 if fps > 0 else 1e-9
+    if start < 0:
+        raise ToolError("start must be >= 0")
+    if end <= start:
+        raise ToolError(f"end ({end:.3f}s) must be after start ({start:.3f}s)")
+    if end > total + tolerance:
+        raise ToolError(f"end ({end:.3f}s) is past the end of the timeline ({total:.3f}s)")
+    try:
+        crf = 20 if a.get("crf") is None else int(a["crf"])
+        timeout = 7200 if a.get("timeout") is None else int(a["timeout"])
+    except (TypeError, ValueError):
+        raise ToolError("crf and timeout must be integers")
+    if not 0 <= crf <= 51:
+        raise ToolError("crf must be between 0 and 51")
+    if timeout <= 0:
+        raise ToolError("timeout must be a positive integer")
+    preset = "medium" if a.get("preset") is None else a.get("preset")
+    for name in ("width", "height"):
+        if a.get(name) is not None:
+            try:
+                value = float(a[name])
+            except (TypeError, ValueError):
+                raise ToolError(f"{name} must be a positive number")
+            if not math.isfinite(value) or value <= 0:
+                raise ToolError(f"{name} must be a positive number")
+    width, height = _render_size(doc,
+                                 None if a.get("width") is None else a.get("width"),
+                                 None if a.get("height") is None else a.get("height"))
+    dry_run = bool(a.get("dry_run"))
+    project = xmlgen.write_project(doc, project_out)
     try:
         info = render.melt_render(
-            project, out, fps=edlmod.fps(doc),
-            crf=int(a.get("crf") or 20), preset=a.get("preset") or "medium",
+            project, out, fps=fps, crf=crf, preset=preset,
             width=width, height=height,
-            start=media.parse_time(a["start"], edlmod.fps(doc)) if a.get("start") else None,
-            end=media.parse_time(a["end"], edlmod.fps(doc)) if a.get("end") else None,
-            timeout=int(a.get("timeout") or 7200))
-    except render.RenderError as exc:
+            start=start if a.get("start") is not None else None,
+            end=end if a.get("end") is not None else None,
+            timeout=timeout, dry_run=dry_run)
+    except (render.RenderError, media.MediaError) as exc:
         raise ToolError(str(exc))
-    return (f"rendered {info['out']}\n  {info['duration']:.2f}s, "
+    if dry_run:
+        return (f"dry run: project {project}\nrender -> {info['out']}\n"
+                f"command: {' '.join(str(x) for x in info['cmd'])}")
+    return (f"rendered {info['out']}\n  {info['duration'] or 0:.2f}s, "
             f"{info['width']}x{info['height']}, {info['size']/1e6:.1f} MB")
 
 
 def preview(a):
     doc, p = _edl(a.get("edl"))
-    project = xmlgen.write_project(doc, _sibling(p, ".kdenlive", a.get("project_out")))
-    out = _sibling(p, ".preview.mp4", a.get("out"))
-    width = _even(a.get("width") or 320)
+    fps = edlmod.fps(doc)
+    project_out = _safe_output(p, doc, _sibling(p, ".kdenlive", a.get("project_out")),
+                               "project_out")
+    out = _safe_output(p, doc, _sibling(p, ".preview.mp4", a.get("out")), "out")
+    if os.path.realpath(out) == os.path.realpath(project_out):
+        raise ToolError("out and project_out must be different paths")
+    width = a.get("width") if a.get("width") is not None else 320
+    try:
+        width = float(width)
+    except (TypeError, ValueError):
+        raise ToolError("width must be a positive number")
+    if not math.isfinite(width) or width <= 0:
+        raise ToolError("width must be a positive number")
+    width = min(max(_even4(width), 16), 1920)
     aspect = doc["profile"]["height"] / doc["profile"]["width"]
-    height = _even(width * aspect)
+    height = _even4(width * aspect)
     times = a.get("times")
     if times:
-        times = list(times)[:MAX_FRAMES]
-    count = min(max(1, int(a.get("count") or 4)), MAX_FRAMES)
+        try:
+            times = [media.parse_time(t, fps) for t in list(times)[:MAX_FRAMES]]
+        except media.MediaError as exc:
+            raise ToolError(str(exc))
+        times = [t for t in times if t is not None]
+    count = a.get("count") if a.get("count") is not None else 4
+    try:
+        count = min(max(1, int(count)), MAX_FRAMES)
+        timeout = 1800 if a.get("timeout") is None else int(a["timeout"])
+    except (TypeError, ValueError):
+        raise ToolError("count and timeout must be integers")
+    if timeout <= 0:
+        raise ToolError("timeout must be a positive integer")
+    project = xmlgen.write_project(doc, project_out)
     try:
         info, frames = render.preview(project, out, times=times,
                                       count=count, width=width,
-                                      height=height, fps=edlmod.fps(doc),
-                                      timeout=int(a.get("timeout") or 1800))
+                                      height=height, fps=fps,
+                                      timeout=timeout)
     except (render.RenderError, media.MediaError) as exc:
         raise ToolError(str(exc))
     text = (f"preview rendered: {info['out']} ({info['duration']:.2f}s, {width}px)\n"
@@ -340,7 +503,8 @@ def preview(a):
 
 def open_project(a):
     doc, p = _edl(a.get("edl"))
-    project = xmlgen.write_project(doc, _sibling(p, ".kdenlive", a.get("out")))
+    out = _safe_output(p, doc, _sibling(p, ".kdenlive", a.get("out")), "out")
+    project = xmlgen.write_project(doc, out)
     try:
         render.open_in_kdenlive(project)
     except render.RenderError as exc:
@@ -350,7 +514,10 @@ def open_project(a):
 
 def output_check(a):
     p = _path(a.get("file"), "file")
-    info = media.probe(p)
+    try:
+        info = media.probe(p)
+    except media.MediaError as exc:
+        raise ToolError(str(exc))
     lines = [_fmt_media(info)]
     try:
         levels = media.loudness(p)
@@ -372,10 +539,26 @@ def import_project(a):
     except Exception as exc:  # noqa: BLE001
         raise ToolError(f"could not import: {exc}")
     out = edlmod.path_of(a.get("edl") or src.rsplit(".", 1)[0] + ".edl.json")
-    edlmod.save(doc, out)
-    return (f"imported {src} -> {out}\n"
-            f"(best effort: per-clip effects, keyframes and transitions are not\n"
-            f"carried over, only clip positions, sources and fades)\n\n{edlmod.summarize(doc)}")
+    if os.path.exists(out) and not a.get("overwrite"):
+        raise ToolError(f"EDL already exists: {out}. Pass overwrite=true to replace it, "
+                        f"or give a different 'edl' path.")
+    dropped = doc.pop("_import_dropped", [])
+    try:
+        edlmod.save(doc, out)
+    except (edlmod.EdlError, media.MediaError) as exc:
+        raise ToolError(f"could not save the imported EDL: {exc}")
+    lines = [f"imported {src} -> {out}",
+             "(best effort: per-clip effects, keyframes and transitions are not",
+             "carried over; positions, sources, fades and audio gain are)"]
+    if dropped:
+        lines.append(f"dropped {len(dropped)} clip(s) whose media is missing:")
+        for tid, at, resource in dropped[:20]:
+            lines.append(f"  {tid} @ {at:.2f}s  {resource or '(no resource)'}")
+        if len(dropped) > 20:
+            lines.append(f"  ... and {len(dropped) - 20} more")
+    lines.append("")
+    lines.append(edlmod.summarize(doc))
+    return "\n".join(lines)
 
 
 # -------------------------------------------------------------- xml importing
@@ -393,9 +576,27 @@ def _props(el):
     return out
 
 
+MAX_PROJECT_BYTES = 64 * 1024 * 1024
+
+
+def _load_kdenlive_xml(path):
+    """Parse a .kdenlive file with a size cap and no DTD/entity expansion."""
+    try:
+        size = os.path.getsize(path)
+    except OSError as exc:
+        raise ValueError(f"cannot stat project: {exc}")
+    if size > MAX_PROJECT_BYTES:
+        raise ValueError(f"project is too large ({size} bytes; limit {MAX_PROJECT_BYTES})")
+    with open(path, "rb") as f:
+        data = f.read(MAX_PROJECT_BYTES + 1)
+    lower = data.lower()
+    if b"<!doctype" in lower or b"<!entity" in lower:
+        raise ValueError("DTD/entity declarations are not allowed in imported projects")
+    return ET.fromstring(data)
+
+
 def parse_kdenlive(path):
-    tree = ET.parse(path)
-    root = tree.getroot()
+    root = _load_kdenlive_xml(path)
     prof = root.find("profile")
     fps = 25.0
     width, height = 1920, 1080
@@ -474,17 +675,23 @@ def _import_track(doc, playlist, tid, fps, services, bin_names):
             continue
         if child.tag != "entry":
             continue
-        prod = services.get(child.get("producer"))
-        if prod is None:
-            continue
-        pr = _props(prod)
         in_ = _tc_to_seconds(child.get("in"), fps)
         out = _tc_to_seconds(child.get("out"), fps)
         dur = max(1.0 / fps, out - in_ + 1.0 / fps)
+        prod = services.get(child.get("producer"))
+        if prod is None:
+            # keep the timeline length correct even when a producer is unresolved
+            cursor += dur
+            continue
+        pr = _props(prod)
         service = pr.get("mlt_service", "")
         resource = pr.get("resource", "")
         clip = {"id": edlmod.new_id(), "track": tid, "start": round(cursor, 6),
                 "duration": round(dur, 6), "gain": 1.0, "effects": []}
+        label = (bin_names.get(_props(child).get("kdenlive:id"))
+                 or pr.get("kdenlive:clipname"))
+        if label:
+            clip["label"] = label
         if service in ("color", "colour"):
             clip.update(kind="color", color=resource)
         elif service == "kdenlivetitle":
@@ -496,6 +703,7 @@ def _import_track(doc, playlist, tid, fps, services, bin_names):
                         title={"text": text, "duration": round(dur, 6)})
         else:
             if not resource or not os.path.exists(resource):
+                doc.setdefault("_import_dropped", []).append((tid, cursor, resource))
                 cursor += dur
                 continue
             clip.update(kind="media", media=os.path.abspath(resource),
@@ -591,20 +799,25 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "path of the EDL ('.edl.json' is appended if missing)"},
-                "width": {"type": "integer"},
-                "height": {"type": "integer"},
-                "fps": {"type": "number"},
-                "profile": {"type": "string", "description": "shortcut: 1080p25, 1080p30, 1080p24, 720p25, 720p30, 1080p60, vertical1080, 4k30"},
+                "width": {"type": "integer", "description": "frame width in pixels (default 1920; profile overrides it)"},
+                "height": {"type": "integer", "description": "frame height in pixels (default 1080; profile overrides it)"},
+                "fps": {"type": "number", "description": "frames per second (default 25; profile overrides it)"},
+                "profile": {"type": "string", "enum": sorted(edlmod.DEFAULT_PROFILES),
+                            "description": "profile shortcut that sets width/height/fps"},
                 "name": {"type": "string"},
+                "overwrite": {"type": "boolean", "default": False,
+                              "description": "replace the EDL if it already exists (default false)"},
             },
             "required": ["path"],
         },
+        "annotations": {"destructiveHint": True},
         "handler": project_create,
     },
     {
         "name": "project_show",
         "description": "Show the timeline of a project: tracks, clips, in/out points, fades, duration.",
         "inputSchema": {"type": "object", "properties": {"edl": {"type": "string"}}, "required": ["edl"]},
+        "annotations": {"readOnlyHint": True},
         "handler": project_show,
     },
     {
@@ -612,8 +825,10 @@ TOOLS = [
         "description": "Change the project frame size / frame rate.",
         "inputSchema": {
             "type": "object",
-            "properties": {"edl": {"type": "string"}, "width": {"type": "integer"},
-                           "height": {"type": "integer"}, "fps": {"type": "number"},
+            "properties": {"edl": {"type": "string"},
+                           "width": {"type": "integer", "description": "positive even frame width"},
+                           "height": {"type": "integer", "description": "positive even frame height"},
+                           "fps": {"type": "number", "description": "positive frame rate"},
                            "progressive": {"type": "boolean"}},
             "required": ["edl"],
         },
@@ -626,7 +841,9 @@ TOOLS = [
             "type": "object",
             "properties": {"path": {"type": "string"},
                            "paths": {"type": "array", "items": {"type": "string"}}},
+            "anyOf": [{"required": ["path"]}, {"required": ["paths"]}],
         },
+        "annotations": {"readOnlyHint": True},
         "handler": media_probe,
     },
     {
@@ -634,9 +851,12 @@ TOOLS = [
         "description": "List usable media in a directory with their metadata.",
         "inputSchema": {
             "type": "object",
-            "properties": {"dir": {"type": "string"}, "recursive": {"type": "boolean"}},
+            "properties": {"dir": {"type": "string"}, "recursive": {"type": "boolean"},
+                           "limit": {"type": "integer", "default": 1000, "minimum": 1,
+                                     "description": "maximum number of files to list (default 1000)"}},
             "required": ["dir"],
         },
+        "annotations": {"readOnlyHint": True},
         "handler": media_scan,
     },
     {
@@ -658,38 +878,40 @@ TOOLS = [
             "properties": {"edl": {"type": "string"}, "track": {"type": "string"}},
             "required": ["edl", "track"],
         },
+        "annotations": {"destructiveHint": True},
         "handler": track_remove,
     },
     {
         "name": "clip_add",
-        "description": ("Place a clip on a track. kind=media uses 'media' (in/out are source seconds), "
-                        "kind=color uses 'color' + duration, kind=title uses 'title' {text, style} + duration. "
-                        "Times accept seconds or '12.5s', '150f', 'HH:MM:SS.mmm'. start=append places it right "
-                        "after the last clip on the track."),
+        "description": ("Place a clip on a track. kind=media requires 'media' (in/out are source seconds), "
+                        "kind=color requires 'color' and duration, kind=title requires 'title' {text, style} "
+                        "and duration. Times accept seconds or '12.5s', '150f', 'HH:MM:SS.mmm'. When append "
+                        "is true, start is ignored and the clip goes right after the last clip on the track."),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "edl": {"type": "string"},
                 "track": {"type": "string"},
                 "kind": {"type": "string", "enum": ["media", "color", "title"]},
-                "media": {"type": "string"},
-                "color": {"type": "string", "description": "#rrggbb or a color name"},
-                "title": {"type": "object", "properties": {
+                "media": {"type": "string", "description": "required when kind=media"},
+                "color": {"type": "string", "description": "required when kind=color: #rrggbb or a color name"},
+                "title": {"type": "object", "description": "required when kind=title: {text, style}",
+                          "properties": {
                     "text": {"type": "string"},
                     "style": {"type": "object", "properties": {
                         "font": {"type": "string"}, "size": {"type": "integer"},
                         "color": {"type": "string"}, "outline": {"type": "integer"},
                         "outline_color": {"type": "string"}, "x": {"type": "integer"},
                         "y": {"type": "integer"}, "weight": {"type": "integer"}}}}},
-                "start": {"description": "timeline position in seconds"},
-                "in": {"description": "source in point"},
-                "out": {"description": "source out point"},
-                "duration": {"description": "clip length"},
+                "start": _time_schema("timeline position; ignored when append is true"),
+                "in": _time_schema("source in point (media clips only)"),
+                "out": _time_schema("source out point (media clips only)"),
+                "duration": _time_schema("clip length; required for color/title clips"),
                 "gain": {"type": "number", "description": "audio gain multiplier, 1.0 = original"},
                 "fade_in": {"type": "number"},
                 "fade_out": {"type": "number"},
                 "label": {"type": "string"},
-                "append": {"type": "boolean", "description": "append after the last clip of the track"},
+                "append": {"type": "boolean", "description": "append after the last clip of the track (start is ignored)"},
             },
             "required": ["edl", "track"],
         },
@@ -702,7 +924,11 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "edl": {"type": "string"}, "clip_id": {"type": "string"},
-                "track": {"type": "string"}, "start": {}, "duration": {}, "in": {}, "out": {},
+                "track": {"type": "string"},
+                "start": _time_schema("new timeline position"),
+                "duration": _time_schema("new clip length (source in/out follow for media)"),
+                "in": _time_schema("new source in point (media clips)"),
+                "out": _time_schema("new source out point (media clips)"),
                 "gain": {"type": "number"}, "fade_in": {"type": "number"},
                 "fade_out": {"type": "number"}, "label": {"type": "string"},
                 "title": {"type": "object"},
@@ -716,13 +942,14 @@ TOOLS = [
         "description": "Delete a clip from the timeline.",
         "inputSchema": {"type": "object", "properties": {"edl": {"type": "string"}, "clip_id": {"type": "string"}},
                         "required": ["edl", "clip_id"]},
+        "annotations": {"destructiveHint": True},
         "handler": clip_remove,
     },
     {
         "name": "clip_split",
         "description": "Split a clip at an absolute timeline position.",
         "inputSchema": {"type": "object", "properties": {"edl": {"type": "string"}, "clip_id": {"type": "string"},
-                                                         "at": {}},
+                                                         "at": _time_schema("absolute timeline position to split at")},
                         "required": ["edl", "clip_id", "at"]},
         "handler": clip_split,
     },
@@ -738,9 +965,11 @@ TOOLS = [
     },
     {
         "name": "effect_remove",
-        "description": "Remove effects from a clip (all, or just one service).",
+        "description": "Remove effects from a clip (all, one service, or one index from effect_add).",
         "inputSchema": {"type": "object", "properties": {"edl": {"type": "string"}, "clip_id": {"type": "string"},
-                                                         "service": {"type": "string"}},
+                                                         "service": {"type": "string"},
+                                                         "effect_index": {"type": "integer", "minimum": 0,
+                                                                          "description": "0-based effect index shown by effect_add"}},
                         "required": ["edl", "clip_id"]},
         "handler": effect_remove,
     },
@@ -753,8 +982,14 @@ TOOLS = [
     },
     {
         "name": "validate",
-        "description": "Compile and validate the project: XML well-formedness plus a full melt render to the null consumer.",
-        "inputSchema": {"type": "object", "properties": {"edl": {"type": "string"}, "out": {"type": "string"}},
+        "description": ("Compile and validate the project: XML well-formedness, missing media, and "
+                        "a full melt render to the null consumer (skip with skip_melt)."),
+        "inputSchema": {"type": "object", "properties": {
+                            "edl": {"type": "string"}, "out": {"type": "string"},
+                            "timeout": {"type": "integer", "default": 900, "minimum": 1,
+                                        "description": "melt timeout in seconds (default 900)"},
+                            "skip_melt": {"type": "boolean", "default": False,
+                                          "description": "only check the XML and timeline; do not run melt"}},
                         "required": ["edl"]},
         "handler": validate,
     },
@@ -765,12 +1000,23 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "edl": {"type": "string"}, "out": {"type": "string"},
-                "crf": {"type": "integer"}, "preset": {"type": "string"},
-                "width": {"type": "integer"}, "height": {"type": "integer"},
-                "start": {}, "end": {}, "timeout": {"type": "integer"},
+                "project_out": {"type": "string",
+                                "description": "path of the intermediate .kdenlive project"},
+                "crf": {"type": "integer", "minimum": 0, "maximum": 51,
+                        "description": "H.264 quality (default 20; lower is better)"},
+                "preset": {"type": "string", "description": "x264 preset (default medium)"},
+                "width": {"type": "integer", "description": "output width; height is derived when omitted"},
+                "height": {"type": "integer", "description": "output height; width is derived when omitted"},
+                "start": _time_schema("timeline start position (default 0)"),
+                "end": _time_schema("timeline end position (default timeline duration)"),
+                "timeout": {"type": "integer", "default": 7200, "minimum": 1,
+                            "description": "render timeout in seconds (default 7200)"},
+                "dry_run": {"type": "boolean", "default": False,
+                            "description": "return the melt command without rendering"},
             },
             "required": ["edl", "out"],
         },
+        "annotations": {"destructiveHint": True},
         "handler": render_project,
     },
     {
@@ -781,10 +1027,15 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "edl": {"type": "string"}, "out": {"type": "string"},
-                "times": {"type": "array", "items": {"type": "number"},
-                          "description": "timeline seconds to grab"},
-                "count": {"type": "integer", "description": "frames spread over the timeline when times is omitted"},
-                "width": {"type": "integer"},
+                "project_out": {"type": "string",
+                                "description": "path of the intermediate .kdenlive project"},
+                "times": {"type": "array",
+                          "items": _time_schema(),
+                          "description": "timeline positions to grab (at most 24)"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 24,
+                          "description": "frames spread over the timeline when times is omitted (default 4)"},
+                "width": {"type": "integer", "minimum": 16, "maximum": 1920,
+                          "description": "preview width in pixels (default 320; snapped to even)"},
                 "inline": {"type": "boolean", "description": "return the frames as images (default true)"},
             },
             "required": ["edl"],
@@ -802,12 +1053,15 @@ TOOLS = [
         "name": "output_check",
         "description": "Inspect a rendered file: streams, duration, audio peak level (catches silent renders).",
         "inputSchema": {"type": "object", "properties": {"file": {"type": "string"}}, "required": ["file"]},
+        "annotations": {"readOnlyHint": True},
         "handler": output_check,
     },
     {
         "name": "import_kdenlive",
         "description": "Import an existing .kdenlive project into an EDL (best effort: positions, sources, fades).",
-        "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "edl": {"type": "string"}},
+        "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "edl": {"type": "string"},
+                                                         "overwrite": {"type": "boolean", "default": False,
+                                                                       "description": "replace an existing EDL (default false)"}},
                         "required": ["project"]},
         "handler": import_project,
     },

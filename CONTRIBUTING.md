@@ -34,7 +34,7 @@ dependency unless there is a very strong reason; stdlib only is a project goal.
 ```bash
 git clone <your-fork>
 cd kdenlive-mcp
-python3 server.py --version      # kdenlive-mcp 1.0.0
+python3 server.py --version      # kdenlive-mcp 1.0.1
 python3 server.py --list-tools   # the 20 tool names
 ```
 
@@ -47,10 +47,12 @@ driven by hand or with `echo '{"jsonrpc":"2.0",...}' | python3 server.py`.
 python3 tests/test_e2e.py
 ```
 
-The suite takes about two minutes. It generates sample media with ffmpeg,
-talks to the server over stdio like a real MCP client, renders with `melt`, and
-checks pixels (fades, colour clips, titles, audio mix). It prints every check
-and exits non-zero on failure.
+The suite has 120 checks and usually finishes in under a minute. It generates
+sample media with ffmpeg, talks to the server over stdio like a real MCP client,
+renders with `melt`, and checks pixels (fades, colour clips, titles, audio mix).
+It prints every check and exits non-zero on failure. CI allows 20 minutes for
+the suite and kills it after 900 seconds, so a local run that takes much longer
+than a minute or two is a regression, not just slow hardware.
 
 By default it works in `/tmp/kdenlive-mcp-test`. Set `KD_TEST_DIR` to use
 another directory and avoid collisions with parallel runs:
@@ -59,9 +61,17 @@ another directory and avoid collisions with parallel runs:
 KD_TEST_DIR="$(mktemp -d)/kdenlive-mcp-test" python3 tests/test_e2e.py
 ```
 
-CI runs the same command on Python 3.9 and 3.12 with `ffmpeg` and `melt`
-installed from apt. Please run it locally before opening a pull request; a
-targeted manual render is not a substitute for the suite.
+CI runs the same command on Python 3.9, 3.12 and 3.13 with `ffmpeg`, `melt`
+and `libmltqt7` installed from apt. Please run it locally before opening a pull
+request; a targeted manual render is not a substitute for the suite.
+
+On a headless machine (no X/Wayland session) set `QT_QPA_PLATFORM=offscreen`
+before running the suite. MLT's `kdenlivetitle` and `qtblend` need a Qt platform
+even though nothing is displayed:
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 tests/test_e2e.py
+```
 
 ## Coding guidelines
 
@@ -101,7 +111,7 @@ There is intentionally no lint/format job in CI; match the existing style
   generated XML or rendering. Pixel checks are welcome but keep them fast and
   deterministic.
 - Small documentation fixes are welcome as-is.
-- CI must pass on both Python versions before merge. Maintainers may ask for a
+- CI must pass on all supported Python versions before merge. Maintainers may ask for a
   change if it breaks 3.9 compatibility or introduces a dependency.
 
 ## Licensing

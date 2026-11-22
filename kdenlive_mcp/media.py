@@ -46,14 +46,27 @@ def run(cmd, timeout=600, cwd=None):
     try:
         out_b, err_b = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        # start_new_session makes the child a process-group leader, so killing
+        # the group (pgid == pid) takes down its whole tool chain.
         try:
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            os.killpg(p.pid, signal.SIGKILL)
         except OSError:
-            p.kill()
+            try:
+                p.kill()
+            except OSError:
+                pass
         try:
             p.communicate(timeout=10)
         except subprocess.TimeoutExpired:
-            pass
+            # last resort: make sure nothing is left waiting to be reaped
+            try:
+                p.kill()
+            except OSError:
+                pass
+            try:
+                p.wait()
+            except subprocess.TimeoutExpired:
+                pass
         return 124, "", f"timeout after {timeout}s: {' '.join(map(str, cmd))}"
     return p.returncode, out_b.decode("utf-8", "replace"), err_b.decode("utf-8", "replace")
 
@@ -113,10 +126,12 @@ def probe(path):
     fmt = data.get("format", {})
     vs = next((s for s in streams if s.get("codec_type") == "video"), None)
     aud = [s for s in streams if s.get("codec_type") == "audio"]
+    st = os.stat(path)
     info = {
         "path": os.path.abspath(path),
         "duration": float(fmt.get("duration") or 0.0),
         "size": int(fmt.get("size") or 0),
+        "mtime": int(st.st_mtime),
         "format": fmt.get("format_name", ""),
         "has_video": vs is not None,
         "has_audio": bool(aud),
@@ -157,6 +172,22 @@ def probe(path):
     if not info["has_video"] and info["has_audio"]:
         info["is_image"] = False
     return info
+
+
+def cache_valid(path, info):
+    """True when cached probe info still matches the file on disk."""
+    if not isinstance(info, dict):
+        return False
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    try:
+        size = int(info.get("size"))
+        mtime = int(info.get("mtime"))
+    except (TypeError, ValueError):
+        return False
+    return size == int(st.st_size) and mtime == int(st.st_mtime)
 
 
 def file_hash(path):
