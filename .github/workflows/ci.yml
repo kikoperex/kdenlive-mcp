@@ -23,7 +23,6 @@ jobs:
       # MLT's kdenlivetitle and qtblend modules need a Qt platform even when
       # nothing is displayed; offscreen keeps the runner headless.
       QT_QPA_PLATFORM: offscreen
-      KD_TEST_DIR: ${{ runner.temp }}/kdenlive-mcp-test
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +60,8 @@ jobs:
 
       - name: End-to-end tests
         timeout-minutes: 20
+        env:
+          KD_TEST_DIR: ${{ runner.temp }}/kdenlive-mcp-test
         run: timeout --signal=KILL 900 python3 -u tests/test_e2e.py
 
   package:
