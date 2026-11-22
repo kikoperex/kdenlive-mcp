@@ -68,7 +68,7 @@ targeted manual render is not a substitute for the suite.
 - **Stdlib only.** No third-party imports in the server or tests.
 - **Python 3.9 compatible.** Avoid `match`, `X | Y` type syntax,
   `list[str]` at runtime, `tomllib`, and other 3.10+ features.
-- **Keep tool schemas documented.** Every MCP tool lives in `tools.py` with a
+- **Keep tool schemas documented.** Every MCP tool lives in `kdenlive_mcp/tools.py` with a
   name, description and `inputSchema`. If you change behaviour, update the
   description and schema so agents can discover it.
 - **Errors are `ToolError`.** Raise `tools.ToolError` for expected failures
@@ -79,7 +79,7 @@ targeted manual render is not a substitute for the suite.
   and pass user paths as separate arguments. Quote nothing by hand.
 - **Timeline semantics matter.** The EDL JSON is the source of truth and the
   `.kdenlive` file is compiled from it; video tracks composite bottom to top,
-  and audio on video tracks is muted. Keep `edl.py`/`xmlgen.py` changes
+  and audio on video tracks is muted. Keep `kdenlive_mcp/edl.py`/`kdenlive_mcp/xmlgen.py` changes
   consistent with the documented format notes in `README.md`.
 - **Keep fixes narrow.** Avoid unrelated reformatting or refactors in a bug-fix
   PR; it makes review and bisecting harder.

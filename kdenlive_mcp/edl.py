@@ -17,7 +17,7 @@ import re
 import tempfile
 import uuid
 
-import media
+from . import media
 
 EDL_VERSION = 1
 DEFAULT_PROFILES = {

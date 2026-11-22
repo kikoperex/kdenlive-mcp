@@ -6,7 +6,7 @@ import os
 import shutil
 import subprocess
 
-import media
+from . import media
 
 
 class RenderError(Exception):

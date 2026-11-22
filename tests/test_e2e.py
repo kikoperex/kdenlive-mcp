@@ -121,6 +121,11 @@ def main():
         shutil.rmtree(WORK)
     a, b, music = sample_media()
     edl = os.path.join(WORK, "proj")
+    pkg = subprocess.run([sys.executable, "-m", "kdenlive_mcp", "--version"],
+                         cwd=os.path.dirname(HERE), capture_output=True, text=True)
+    check("python3 -m kdenlive_mcp --version",
+          pkg.returncode == 0 and pkg.stdout.startswith("kdenlive-mcp "),
+          pkg.stdout + pkg.stderr)
     c = Client()
     try:
         init = c.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},

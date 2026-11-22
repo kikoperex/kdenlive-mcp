@@ -85,9 +85,9 @@ media_scan --> project_create --> clip_add / clip_update / effect_add --> previe
 
 ## Installation
 
-### From a clone
+### From a clone (zero install)
 
-The server is a single entry point and has no Python dependencies, so cloning is enough:
+The server has no Python dependencies, so cloning is enough:
 
 ```bash
 git clone https://github.com/kikoperex/kdenlive-mcp.git
@@ -97,12 +97,13 @@ python3 server.py --list-tools    # one tool name per line, 20 in total
 ```
 
 For the examples below the checkout is assumed to be at
-`$HOME/mcp/kdenlive-mcp`; adjust the path if yours differs.
+`$HOME/mcp/kdenlive-mcp`; adjust the path if yours differs. `server.py` is a thin
+launcher for the `kdenlive_mcp` package; the equivalent package entry point is
+`python3 -m kdenlive_mcp`, which runs from the checkout root.
 
 ### With pipx or uvx
 
-`pipx` and `uvx` need the console-script entry point from `pyproject.toml`. When that
-packaging metadata is present, either form works:
+The project ships a `pyproject.toml` with a `kdenlive-mcp` console script:
 
 ```bash
 # from a checkout
@@ -112,7 +113,8 @@ pipx install .
 uvx --from git+https://github.com/kikoperex/kdenlive-mcp kdenlive-mcp
 ```
 
-Without packaging metadata, run `python3 server.py` from the checkout as shown above.
+After installing, run `kdenlive-mcp --version` or point the MCP client at the
+installed command. Both forms also accept `--list-tools`.
 
 ### Register with pi
 

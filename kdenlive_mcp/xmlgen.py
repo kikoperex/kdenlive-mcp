@@ -33,8 +33,8 @@ import os
 import uuid as uuidlib
 import xml.sax.saxutils as sx
 
-import edl as edlmod
-import media
+from . import edl as edlmod
+from . import media
 
 DOC_VERSION = "1.1"
 DOC_PATCH = "1"

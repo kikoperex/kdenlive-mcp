@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Installable packaging: the server now lives in the `kdenlive_mcp` package with a
+  `pyproject.toml` and a `kdenlive-mcp` console script (`pipx install .`), plus a
+  `python3 -m kdenlive_mcp` entry point. `python3 server.py` remains a thin
+  zero-install launcher.
+
 ## [1.0.0] - 2026-11-20
 
 Initial public release.
@@ -24,7 +31,7 @@ Initial public release.
 - `preview` renders a low-resolution version and returns extracted frames as
   images so an agent can see the result.
 - Best-effort import of an existing `.kdenlive` project back into EDL form,
-  preserving clip position, source and fades where possible.
+  preserving clip position, source, fades and audio gain where possible.
 - `validate` checks that generated XML is well formed and completes a full
   render to the null consumer; `output_check` reports stream information and
   audio peak level to catch silent renders.

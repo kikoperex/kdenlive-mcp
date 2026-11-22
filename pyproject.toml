@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kdenlive-mcp"
+dynamic = ["version"]
+description = "MCP server for Kdenlive/MLT video editing: build timelines, render and preview frames"
+readme = "README.md"
+license = "GPL-2.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "Ángel Pérez" }]
+keywords = ["mcp", "kdenlive", "mlt", "video-editing", "ffmpeg", "ai-agents"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Video :: Non-Linear Editor",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/kikoperex/kdenlive-mcp"
+Repository = "https://github.com/kikoperex/kdenlive-mcp"
+Issues = "https://github.com/kikoperex/kdenlive-mcp/issues"
+Changelog = "https://github.com/kikoperex/kdenlive-mcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+kdenlive-mcp = "kdenlive_mcp.server:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "kdenlive_mcp.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["kdenlive_mcp*"]

@@ -8,10 +8,10 @@ import os
 import re
 import xml.etree.ElementTree as ET
 
-import edl as edlmod
-import media
-import render
-import xmlgen
+from . import edl as edlmod
+from . import media
+from . import render
+from . import xmlgen
 
 
 class ToolError(Exception):

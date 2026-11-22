@@ -91,10 +91,9 @@ media_scan --> project_create --> clip_add / clip_update / effect_add --> previe
 
 ## Instalación
 
-### Desde un clon
+### Desde un clon (sin instalar nada)
 
-El servidor es un único punto de entrada y no tiene dependencias de Python, así que con
-clonar basta:
+El servidor no tiene dependencias de Python, así que con clonar basta:
 
 ```bash
 git clone https://github.com/kikoperex/kdenlive-mcp.git
@@ -104,12 +103,13 @@ python3 server.py --list-tools    # un nombre de herramienta por línea, 20 en t
 ```
 
 En los ejemplos siguientes se supone que el clon está en `$HOME/mcp/kdenlive-mcp`;
-ajusta la ruta si la tuya es distinta.
+ajusta la ruta si la tuya es distinta. `server.py` es un lanzador fino del paquete
+`kdenlive_mcp`; el punto de entrada equivalente del paquete es
+`python3 -m kdenlive_mcp`, que se ejecuta desde la raíz del clon.
 
 ### Con pipx o uvx
 
-`pipx` y `uvx` necesitan el punto de entrada de consola de `pyproject.toml`. Cuando
-exista esa metadata de empaquetado, cualquiera de las dos formas funciona:
+El proyecto incluye un `pyproject.toml` con el script de consola `kdenlive-mcp`:
 
 ```bash
 # desde un clon
@@ -119,8 +119,8 @@ pipx install .
 uvx --from git+https://github.com/kikoperex/kdenlive-mcp kdenlive-mcp
 ```
 
-Sin metadata de empaquetado, ejecuta `python3 server.py` desde el clon como se indica
-arriba.
+Tras instalar, ejecuta `kdenlive-mcp --version` o apunta el cliente MCP al comando
+instalado. Ambas formas aceptan también `--list-tools`.
 
 ### Registrar en pi
 
