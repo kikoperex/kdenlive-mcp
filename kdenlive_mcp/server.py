@@ -10,6 +10,7 @@ ffmpeg/ffprobe/melt/kdenlive.
 """
 
 import json
+import os
 import sys
 import traceback
 

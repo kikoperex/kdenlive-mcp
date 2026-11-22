@@ -72,7 +72,8 @@ class Client:
         try:
             self.err.flush()
             self.err.seek(0)
-            return self.err.read().decode("utf-8", "replace")
+            text = self.err.read()
+            return text.decode("utf-8", "replace") if isinstance(text, bytes) else text
         except (OSError, ValueError):
             return ""
 
