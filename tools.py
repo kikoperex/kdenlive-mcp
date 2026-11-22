@@ -276,16 +276,36 @@ def validate(a):
     return "\n".join(lines)
 
 
+def _even(value):
+    """Snap a size to an even pixel count (libx264 requires even dimensions)."""
+    return max(2, int(round(float(value) / 2.0)) * 2)
+
+
+def _render_size(doc, width, height):
+    """Fill in a missing render dimension from the project aspect ratio."""
+    prof = doc["profile"]
+    pw, ph = float(prof["width"]), float(prof["height"])
+    if width is not None and height is None:
+        width = _even(width)
+        height = _even(width * ph / pw)
+    elif height is not None and width is None:
+        height = _even(height)
+        width = _even(height * pw / ph)
+    elif width is not None and height is not None:
+        width, height = _even(width), _even(height)
+    return width, height
+
+
 def render_project(a):
     doc, p = _edl(a.get("edl"))
     project = xmlgen.write_project(doc, _sibling(p, ".kdenlive", a.get("project_out")))
     out = _sibling(p, ".mp4", a.get("out"))
+    width, height = _render_size(doc, a.get("width") or None, a.get("height") or None)
     try:
         info = render.melt_render(
             project, out, fps=edlmod.fps(doc),
             crf=int(a.get("crf") or 20), preset=a.get("preset") or "medium",
-            width=_even16(a["width"]) if a.get("width") else None,
-            height=_even16(a["height"]) if a.get("height") else None,
+            width=width, height=height,
             start=media.parse_time(a["start"], edlmod.fps(doc)) if a.get("start") else None,
             end=media.parse_time(a["end"], edlmod.fps(doc)) if a.get("end") else None,
             timeout=int(a.get("timeout") or 7200))
@@ -295,18 +315,13 @@ def render_project(a):
             f"{info['width']}x{info['height']}, {info['size']/1e6:.1f} MB")
 
 
-def _even16(value):
-    """Snap a size to a multiple of 16 (melt/libx264 is unhappy with some sizes)."""
-    return max(16, int(round(int(value) / 16.0)) * 16)
-
-
 def preview(a):
     doc, p = _edl(a.get("edl"))
     project = xmlgen.write_project(doc, _sibling(p, ".kdenlive", a.get("project_out")))
     out = _sibling(p, ".preview.mp4", a.get("out"))
-    width = _even16(a.get("width") or 320)
+    width = _even(a.get("width") or 320)
     aspect = doc["profile"]["height"] / doc["profile"]["width"]
-    height = _even16(width * aspect)
+    height = _even(width * aspect)
     times = a.get("times")
     if times:
         times = list(times)[:MAX_FRAMES]
@@ -491,7 +506,7 @@ def _import_track(doc, playlist, tid, fps, services, bin_names):
                     doc["media"][clip["media"]] = media.probe(clip["media"])
                 except media.MediaError:
                     pass
-        # simple fades from brightness/volume keyframes
+        # simple fades/gain from brightness/volume keyframes
         for flt in prod.findall("filter"):
             fp = _props(flt)
             if fp.get("mlt_service") == "brightness" and fp.get("level"):
@@ -500,8 +515,23 @@ def _import_track(doc, playlist, tid, fps, services, bin_names):
                     clip["fade_in"] = round(kf[1][0] - kf[0][0], 6) if len(kf) > 1 else 0
                 if kf and kf[-1][1] == 0:
                     clip["fade_out"] = round(kf[-1][0] - kf[-2][0], 6) if len(kf) > 1 else 0
+            elif fp.get("mlt_service") == "volume" and fp.get("level"):
+                _import_volume(clip, fp["level"], fps)
         doc["clips"].append(clip)
         cursor += dur
+
+
+def _kf_time(pos, fps):
+    """MLT keyframe positions are frames; timecodes stay timecodes."""
+    s = str(pos).strip()
+    if re.match(r"^\d+:\d{1,2}:\d{1,2}(?:\.\d+)?$", s):
+        return _tc_to_seconds(s, fps)
+    if s.endswith("f"):
+        s = s[:-1]
+    try:
+        return float(s) / fps
+    except ValueError:
+        return _tc_to_seconds(s, fps)
 
 
 def _parse_kf(value, fps):
@@ -511,10 +541,44 @@ def _parse_kf(value, fps):
             continue
         pos, val = part.split("=", 1)
         try:
-            points.append((_tc_to_seconds(pos, fps), float(val)))
-        except ValueError:
+            points.append((_kf_time(pos, fps), float(val)))
+        except (ValueError, media.MediaError):
             continue
     return points
+
+
+def _import_volume(clip, value, fps):
+    """Import Kdenlive's Volume filter (dB level) as gain and fades."""
+    text = str(value or "").strip()
+    if not text:
+        return
+    if "=" not in text:
+        try:
+            db = float(text)
+        except ValueError:
+            return
+        clip["gain"] = round(10.0 ** (db / 20.0), 6)
+        return
+    kf = _parse_kf(text, fps)
+    if not kf:
+        return
+    silent = -99.0
+    # The non-silent part of the curve carries the constant gain.
+    plateau = next((v for _t, v in kf if v > silent), None)
+    if plateau is not None:
+        clip["gain"] = round(10.0 ** (plateau / 20.0), 6)
+    if kf[0][1] <= silent:
+        plateau_pt = next(((t, v) for t, v in kf[1:] if v > silent), None)
+        if plateau_pt is not None:
+            fade = plateau_pt[0] - kf[0][0]
+            if fade > 0:
+                clip["fade_in"] = round(fade, 6)
+    if kf[-1][1] <= silent:
+        before = next(((t, v) for t, v in reversed(kf[:-1]) if v > silent), None)
+        if before is not None:
+            fade = kf[-1][0] - before[0]
+            if fade > 0:
+                clip["fade_out"] = round(fade, 6)
 
 
 # ------------------------------------------------------------------ registry

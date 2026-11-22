@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import tools  # noqa: E402
 
-MAX_LINE = 4 * 1024 * 1024
+MAX_LINE = 16 * 1024 * 1024
 SERVER_NAME = "kdenlive-mcp"
 SERVER_VERSION = "1.0.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -96,6 +96,30 @@ def dispatch(method, params):
     raise NotImplementedError(method)
 
 
+def _read_line():
+    """Read one full request line; report and drain anything over MAX_LINE."""
+    parts = []
+    size = 0
+    too_long = False
+    while True:
+        chunk = sys.stdin.readline(65536)
+        if not chunk:
+            break
+        newline = chunk.endswith("\n")
+        if not too_long:
+            parts.append(chunk)
+            size += len(chunk)
+            content_size = size - 1 if newline else size
+            if content_size > MAX_LINE:
+                too_long = True
+                parts.clear()
+        if newline:
+            break
+    if too_long:
+        return "", True
+    return "".join(parts), False
+
+
 def main():
     if "--version" in sys.argv:
         print(f"{SERVER_NAME} {SERVER_VERSION}")
@@ -107,7 +131,13 @@ def main():
     log(f"ready {SERVER_VERSION} ({len(tools.TOOLS)} tools)")
 
     while True:
-        line = sys.stdin.readline(MAX_LINE)
+        line, too_long = _read_line()
+        if too_long:
+            log(f"request exceeds {MAX_LINE} bytes; discarded")
+            _write({"jsonrpc": "2.0", "id": None,
+                    "error": {"code": -32700,
+                              "message": f"parse error: request exceeds {MAX_LINE} bytes"}})
+            continue
         if not line:
             break
         line = line.strip()

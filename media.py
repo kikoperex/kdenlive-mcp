@@ -210,38 +210,6 @@ def extract_frames(source, times, out_dir, width=640, quality=4):
     return made
 
 
-def contact_sheet(source, out, times=None, count=12, width=320, cols=4):
-    """Tile frames into a single review image."""
-    ffmpeg = bin_path("ffmpeg", "/usr/bin/ffmpeg")
-    os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
-    if times:
-        fps_expr = None
-        tmpdir = os.path.join(os.path.dirname(os.path.abspath(out)), ".sheet_tmp")
-        os.makedirs(tmpdir, exist_ok=True)
-        imgs = extract_frames(source, times, tmpdir, width=width)
-        for i, p in enumerate(imgs):
-            os.replace(p, os.path.join(tmpdir, f"s{i:04d}.jpg"))
-        rows = (len(imgs) + cols - 1) // cols
-        rc, _o, err = run([
-            ffmpeg, "-v", "error", "-y", "-i", os.path.join(tmpdir, "s%04d.jpg"),
-            "-vf", f"tile={cols}x{rows}", "-frames:v", "1", out], timeout=180)
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        if rc != 0:
-            raise MediaError(f"contact sheet failed: {err.strip()[:300]}")
-        return out
-    info = probe(source)
-    dur = max(0.5, info["duration"])
-    fps = max(0.1, count / dur)
-    rows = (count + cols - 1) // cols
-    rc, _o, err = run([
-        ffmpeg, "-v", "error", "-y", "-i", source, "-vf",
-        f"fps={fps:.6f},scale={int(width)}:-2,tile={cols}x{rows}",
-        "-frames:v", "1", out], timeout=300)
-    if rc != 0 or not os.path.exists(out):
-        raise MediaError(f"contact sheet failed: {err.strip()[:300]}")
-    return out
-
-
 def loudness(path):
     """Peak / mean volume via ffmpeg volumedetect."""
     ffmpeg = bin_path("ffmpeg", "/usr/bin/ffmpeg")

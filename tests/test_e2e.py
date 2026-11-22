@@ -6,6 +6,7 @@
     python3 tests/test_e2e.py            # ffmpeg sample media generated in /tmp/kdenlive-mcp-test
 """
 
+import base64
 import json
 import os
 import shutil
@@ -104,6 +105,17 @@ def region_max(path, t, x, y, w, h):
     return max(values), sum(values) // len(values)
 
 
+def probe_size(path):
+    txt = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                          "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", path],
+                         capture_output=True, text=True).stdout.strip()
+    try:
+        w, h = txt.split("x")
+        return int(w), int(h)
+    except ValueError:
+        return (0, 0)
+
+
 def main():
     if os.path.exists(WORK):
         shutil.rmtree(WORK)
@@ -172,6 +184,14 @@ def main():
         res = c.call("preview", edl=edl, count=4)
         imgs = [b for b in res["content"] if b["type"] == "image"]
         check("preview returns images", len(imgs) == 4, f"got {len(imgs)}")
+        preview_size = probe_size(os.path.join(WORK, "proj.preview.mp4"))
+        check("preview output keeps 16:9", preview_size == (320, 180), preview_size)
+        if imgs:
+            frame = os.path.join(WORK, "preview_frame.jpg")
+            with open(frame, "wb") as fh:
+                fh.write(base64.b64decode(imgs[0]["data"]))
+            frame_size = probe_size(frame)
+            check("preview frames keep 16:9", frame_size == (320, 180), frame_size)
 
         out = os.path.join(WORK, "out.mp4")
         txt, err, _ = c.text("render", edl=edl, out=out, crf=28, preset="ultrafast")
@@ -249,6 +269,54 @@ def main():
         txt, err, _ = c.text("render", edl=plain, crf=32, preset="ultrafast")
         check("render from *.json keeps dir", not err and os.path.exists(os.path.join(WORK, "plain.mp4")), txt)
 
+        # --- regressions: keyframes are frames, audio import, sizing, long pipes ---
+        kf_edl = os.path.join(WORK, "kf")
+        c.text("project_create", path=kf_edl, width=640, height=360, fps=25)
+        c.text("clip_add", edl=kf_edl, track="V1", kind="media", media=a, start=0,
+               fade_in=0.5, fade_out=0.5)
+        c.text("export_kdenlive", edl=kf_edl)
+        kf_rt = os.path.join(WORK, "kf_rt.edl.json")
+        c.text("import_kdenlive", project=os.path.join(WORK, "kf.kdenlive"), edl=kf_rt)
+        kclip = json.load(open(kf_rt))["clips"][0]
+        frame = 1.0 / 25
+        check("import fade_in uses frame positions",
+              abs(kclip.get("fade_in", 0) - 0.5) <= frame + 1e-6, kclip.get("fade_in"))
+        check("import fade_out uses frame positions",
+              abs(kclip.get("fade_out", 0) - 0.5) <= frame + 1e-6, kclip.get("fade_out"))
+
+        aud_edl = os.path.join(WORK, "aud")
+        c.text("project_create", path=aud_edl, width=640, height=360, fps=25)
+        c.text("clip_add", edl=aud_edl, track="A1", kind="media", media=a,
+               start=0, gain=0.5)
+        c.text("clip_add", edl=aud_edl, track="A1", kind="media", media=music,
+               start=3.2, gain=0.8, fade_in=0.5, fade_out=0.48)
+        c.text("export_kdenlive", edl=aud_edl)
+        aud_rt = os.path.join(WORK, "aud_rt.edl.json")
+        c.text("import_kdenlive", project=os.path.join(WORK, "aud.kdenlive"), edl=aud_rt)
+        aud_clips = json.load(open(aud_rt))["clips"]
+        check("audio volume filter imported", len(aud_clips) == 2, len(aud_clips))
+        if len(aud_clips) == 2:
+            first, second = aud_clips
+            check("audio gain roundtrip", abs(first.get("gain", 1.0) - 0.5) < 1e-4,
+                  first.get("gain"))
+            check("constant gain does not invent fades",
+                  "fade_in" not in first and "fade_out" not in first, first)
+            check("keyframed audio gain roundtrip",
+                  abs(second.get("gain", 1.0) - 0.8) < 0.01, second.get("gain"))
+            check("keyframed audio fade_in roundtrip",
+                  abs(second.get("fade_in", 0) - 0.5) <= frame + 1e-6,
+                  second.get("fade_in"))
+            check("keyframed audio fade_out roundtrip",
+                  abs(second.get("fade_out", 0) - 0.48) <= frame + 1e-6,
+                  second.get("fade_out"))
+
+        wout = os.path.join(WORK, "plain_w.mp4")
+        txt, err, _ = c.text("render", edl=plain, out=wout, width=320, crf=32,
+                             preset="ultrafast")
+        derived_size = probe_size(wout)
+        check("render derives height from width", not err and derived_size == (320, 180),
+              derived_size)
+
         bad = os.path.join(WORK, "bad")
         check("bad fps rejected", c.text("project_create", path=bad, fps=0)[1] is True)
         c.text("project_create", path=bad, width=640, height=360, fps=25)
@@ -261,6 +329,21 @@ def main():
         c.p.stdin.flush()
         pong = c.rpc("ping")
         check("notifications get no reply", pong.get("id") == c.n and pong.get("result") == {}, pong)
+
+        # a line over the old 4 MB cap must be accepted without desyncing stdin
+        c.n += 1
+        big_id = c.n
+        big = {"jsonrpc": "2.0", "id": big_id, "method": "tools/list",
+               "params": {"unused": "x" * (5 * 1024 * 1024)}}
+        c.p.stdin.write(json.dumps(big) + "\n")
+        c.p.stdin.flush()
+        big_resp = json.loads(c.p.stdout.readline())
+        check("large request gets its own response",
+              big_resp.get("id") == big_id and "tools" in big_resp.get("result", {}),
+              big_resp.get("error"))
+        pong = c.rpc("ping")
+        check("stream recovers after large request",
+              pong.get("id") == c.n and pong.get("result") == {}, pong)
     finally:
         c.close()
 
