@@ -22,6 +22,8 @@ SRV = os.path.join(os.path.dirname(HERE), "server.py")
 _raw_work = os.environ.get("KD_TEST_DIR", "/tmp/kdenlive-mcp-test")
 WORK = os.path.abspath(os.path.expanduser(_raw_work)) if _raw_work.strip() else ""
 
+MELT_TIMEOUT = 120
+
 failures = []
 checks = 0
 
@@ -62,7 +64,7 @@ class Client:
         # server while it is writing tracebacks, but the text is still available
         # when something actually goes wrong.
         self.err_path = os.path.join(WORK, "server-stderr.log")
-        self.err = open(self.err_path, "w", encoding="utf-8")
+        self.err = open(self.err_path, "a+", encoding="utf-8")
         self.p = subprocess.Popen([sys.executable, SRV], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=self.err, text=True,
                                   encoding="utf-8", errors="replace", env=env)
@@ -98,7 +100,7 @@ class Client:
 
     def call(self, name, **args):
         if name in ("validate", "render", "preview") and "timeout" not in args:
-            args["timeout"] = int(os.environ.get("KD_MELT_TIMEOUT", "120"))
+            args["timeout"] = MELT_TIMEOUT
         res = self.rpc("tools/call", {"name": name, "arguments": args})
         return res["result"]
 
@@ -229,6 +231,19 @@ def replace_playlist_producer(src, dst, track_name, producer):
 
 
 def main():
+    global MELT_TIMEOUT
+    raw_timeout = os.environ.get("KD_MELT_TIMEOUT")
+    if raw_timeout is not None:
+        raw_timeout = raw_timeout.strip()
+        try:
+            melt_timeout = int(raw_timeout)
+        except ValueError:
+            melt_timeout = 0
+        if melt_timeout <= 0:
+            print(f"invalid KD_MELT_TIMEOUT={raw_timeout!r}: expected a positive "
+                  f"integer number of seconds", file=sys.stderr)
+            return 2
+        MELT_TIMEOUT = melt_timeout
     if not work_dir_is_safe(WORK):
         print(f"refusing to delete unsafe workspace: {WORK!r}; set KD_TEST_DIR to an "
               f"absolute scratch path under {tempfile.gettempdir()} (or a basename "
@@ -237,17 +252,27 @@ def main():
     if os.path.exists(WORK):
         shutil.rmtree(WORK)
     a, b, music = sample_media()
+    # One truncation in main(): both Client instances append to the same log, and
+    # an empty existing file avoids NUL holes from sparse writes.
+    with open(os.path.join(WORK, "server-stderr.log"), "w", encoding="utf-8"):
+        pass
     edl = os.path.join(WORK, "proj")
     pkg = subprocess.run([sys.executable, "-m", "kdenlive_mcp", "--version"],
                          cwd=os.path.dirname(HERE), capture_output=True, text=True)
     version_file = os.path.join(os.path.dirname(HERE), "kdenlive_mcp", "__init__.py")
-    with open(version_file, encoding="utf-8") as fh:
-        version_match = re.search(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]",
-                                  fh.read(), re.MULTILINE)
-    expected_version = "kdenlive-mcp " + (version_match.group(1) if version_match else "")
-    check("python3 -m kdenlive_mcp --version",
-          pkg.returncode == 0 and pkg.stdout.strip() == expected_version,
-          pkg.stdout + pkg.stderr)
+    version_match = None
+    try:
+        with open(version_file, encoding="utf-8") as fh:
+            version_match = re.search(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]",
+                                      fh.read(), re.MULTILINE)
+    except OSError:
+        version_match = None
+    check("version source readable", version_match is not None, version_file)
+    if version_match is not None:
+        expected_version = "kdenlive-mcp " + version_match.group(1)
+        check("python3 -m kdenlive_mcp --version",
+              pkg.returncode == 0 and pkg.stdout.strip() == expected_version,
+              pkg.stdout + pkg.stderr)
     c = Client()
     try:
         init = c.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -302,7 +327,7 @@ def main():
         check("project_show", not err and "9.80s" in show, show)
 
         vtxt, verr, _ = c.text("validate", edl=edl)
-        check("validate", verr is False, vtxt)
+        check("validate", verr is False and "melt: ok" in vtxt, vtxt)
 
         txt, err, _ = c.text("export_kdenlive", edl=edl)
         kdenlive = os.path.join(WORK, "proj.kdenlive")

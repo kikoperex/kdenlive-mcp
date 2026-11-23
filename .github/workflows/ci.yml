@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.13"]
+        python: ["3.9", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
 
@@ -45,7 +45,7 @@ jobs:
       image: buildpack-deps:sid-scm
     env:
       KD_TEST_DIR: /tmp/kdenlive-mcp-test
-      KD_MELT_TIMEOUT: "120"
+      KD_MELT_TIMEOUT: "90"
       QT_QPA_PLATFORM: xcb
       LIBGL_ALWAYS_SOFTWARE: "1"
     steps:
@@ -53,12 +53,18 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
             python3 ffmpeg melt xvfb xauth libxkbcommon-x11-0 \
             libxcb-xinerama0 libgl1-mesa-dri libglx-mesa0
+          QT_QPA_PLATFORM=offscreen melt -query producers 2>/dev/null | grep -q kdenlivetitle || { echo "::error title=MLT Qt module missing::kdenlivetitle producer unavailable"; exit 1; }
+          QT_QPA_PLATFORM=offscreen melt -query filters 2>/dev/null | grep -q qtblend || { echo "::error title=MLT Qt module missing::qtblend filter unavailable"; exit 1; }
           python3 --version
           melt --version | head -n 1
+          if ! melt --version | head -n 1 | grep -q '7\.42'; then
+            echo "::warning title=MLT version drift::expected MLT 7.42, got $(melt --version | head -n 1)"
+          fi
 
       - name: Server smoke test
         run: |
@@ -75,16 +81,30 @@ jobs:
           rc=$?
           tail -n 30 /tmp/e2e.log
           if [ "$rc" -ne 0 ]; then
-            tail -n 5 /tmp/e2e.log | while IFS= read -r line; do
-              echo "::error title=e2e tail::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')"
-            done
-            if [ -f "$KD_TEST_DIR/server-stderr.log" ]; then
-              tail -n 5 "$KD_TEST_DIR/server-stderr.log" | while IFS= read -r line; do
-                echo "::error title=server stderr tail::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')"
-              done
-            fi
             if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
               echo "::error title=e2e hard timeout::hard timeout / killed (rc=$rc)"
+            fi
+            grep -E 'FAIL|SKIP' /tmp/e2e.log | head -n 4 | while IFS= read -r line; do
+              echo "::error title=e2e failure::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')"
+            done
+            if [ -f "$KD_TEST_DIR/server-stderr.log" ]; then
+              grep -E 'Traceback|Error|tool crash' "$KD_TEST_DIR/server-stderr.log" | head -n 3 | while IFS= read -r line; do
+                echo "::error title=server stderr::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')"
+              done
+            fi
+          else
+            grep -qE "all [0-9]+ checks passed" /tmp/e2e.log || { echo "::error title=e2e summary missing::suite did not report a passing summary"; rc=1; }
+            if [ "$rc" -eq 0 ]; then
+              SUMMARY_LINE="$(grep -E "all [0-9]+ checks passed" /tmp/e2e.log | tail -n 1)"
+              echo "$SUMMARY_LINE"
+              grep -qE "all (12[0-9]|1[3-9][0-9]) checks" /tmp/e2e.log || echo "::warning title=e2e check count::check count dropped below 120: $SUMMARY_LINE"
+              {
+                echo "### e2e"
+                echo "$SUMMARY_LINE"
+                echo '```'
+                melt --version | head -n 1
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
           exit "$rc"
@@ -115,3 +135,10 @@ jobs:
           /tmp/kdenlive-mlt-mcp-venv/bin/python -m pip install dist/*.whl
           /tmp/kdenlive-mlt-mcp-venv/bin/kdenlive-mcp --version
           /tmp/kdenlive-mlt-mcp-venv/bin/kdenlive-mcp --list-tools
+
+      - name: Install sdist into a second venv and smoke test
+        run: |
+          python3 -m venv /tmp/kdenlive-mlt-mcp-sdist
+          /tmp/kdenlive-mlt-mcp-sdist/bin/python -m pip install --upgrade pip
+          /tmp/kdenlive-mlt-mcp-sdist/bin/python -m pip install dist/*.tar.gz
+          /tmp/kdenlive-mlt-mcp-sdist/bin/kdenlive-mcp --version

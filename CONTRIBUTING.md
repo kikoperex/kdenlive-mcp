@@ -49,17 +49,20 @@ driven by hand or with `echo '{"jsonrpc":"2.0",...}' | python3 server.py`.
 python3 tests/test_e2e.py
 ```
 
-The suite has 120 checks and usually finishes in under a minute. It generates
+The suite has 121 checks and usually finishes in under a minute. It generates
 sample media with ffmpeg, talks to the server over stdio like a real MCP client,
 renders with `melt`, and checks pixels (fades, colour clips, titles, audio mix).
 It prints every check and exits non-zero on failure. CI splits validation in
 two: a fast compatibility job runs `py_compile` and the server smoke tests on
-Python 3.9 and 3.13 without `melt`, and the full suite runs once in a Debian sid
-container with MLT 7.42 under Xvfb. The e2e job sets `KD_MELT_TIMEOUT=120` to
-bound every `melt` call and has a 5-minute hard timeout (a 300-second outer
-`timeout`), so a local run that takes much longer than a minute or two is a
-regression, not just slow hardware. Ubuntu 24.04 ships MLT 7.22, whose `melt`
-can hang on some projects, so it is not used for the render e2e.
+Python 3.9, 3.12 and 3.13 without `melt`, and the full suite runs once in a
+Debian sid container with MLT 7.42 under Xvfb. The e2e job sets
+`KD_MELT_TIMEOUT=90` to bound every `melt` call (the harness default is 120) and
+has a 5-minute hard timeout (a 300-second outer `timeout`), so a local run that
+takes much longer than a minute or two is a regression, not just slow hardware.
+It also asserts the `all N checks passed` summary, warns if the check count
+drops below 120, and warns if MLT drifts from 7.42. Ubuntu 24.04 ships MLT
+7.22, whose `melt` can hang on some projects, so it is not used for the render
+e2e.
 
 By default it works in `/tmp/kdenlive-mcp-test`. Set `KD_TEST_DIR` to use
 another directory and avoid collisions with parallel runs:
@@ -79,6 +82,19 @@ even though nothing is displayed:
 ```bash
 xvfb-run -a python3 tests/test_e2e.py
 ```
+
+### Debugging CI hangs
+
+- `KD_FAULTHANDLER=30` dumps the server's stack traces to stderr after 30
+  seconds. The hook is opt-in and one-shot: it fires once and does not keep
+  printing, so leave it unset for normal runs.
+- `KD_MELT_TIMEOUT` defaults to 120 seconds. The test harness injects it into
+  every `validate`, `render` and `preview` call, so a hung `melt` fails the
+  check instead of blocking the job. CI sets it to 90 so two hung calls still
+  fit inside the 300-second outer timeout.
+- MLT 7.22 (Ubuntu 24.04) can hang around 96% on some projects. That is why
+  the e2e job runs Debian sid with MLT 7.42; check `melt --version` before
+  blaming the test.
 
 ## Coding guidelines
 

@@ -288,14 +288,16 @@ The end-to-end test requires `ffmpeg`, `ffprobe` and `melt`. It generates 640x36
 media in `/tmp/kdenlive-mcp-test` (override with `KD_TEST_DIR`), starts `server.py`, and
 speaks newline-delimited JSON-RPC over stdio like a real client.
 
-The suite has 120 checks and usually finishes in under a minute. It verifies tool schemas, media probing/scanning, editing and
+The suite has 121 checks and usually finishes in under a minute. It verifies tool schemas, media probing/scanning, editing and
 overlap rejection, profile/track changes, `.kdenlive` export and import (including fades
 and audio gain), preview image counts and aspect ratio, render duration and sizing, and
 actual pixels (color clip, red clip, fade to black, visible title), plus audio peak,
 large requests and error handling. CI runs the full suite in a Debian sid container with
 MLT 7.42 under Xvfb, with a 5-minute hard timeout (a 300-second outer `timeout`) because
-the runner is headless. A separate fast compatibility job compiles and smoke-tests the
-server on Python 3.9 and 3.13 without `melt` or the e2e suite.
+the runner is headless. The e2e job also asserts the `all N checks passed` summary, warns
+if the count drops below 120, and warns if MLT drifts from 7.42. A separate fast
+compatibility job compiles and smoke-tests the server on Python 3.9, 3.12 and 3.13
+without `melt` or the e2e suite.
 
 ## Troubleshooting
 

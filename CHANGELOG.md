@@ -7,10 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `KD_FAULTHANDLER=N` opt-in diagnostic hook that dumps the server's stack
+  traces to stderr after N seconds (one-shot), to debug CI hangs.
+
 ### Changed
 
-- CI: full e2e on Debian sid/MLT 7.42, Python 3.9/3.13 compatibility job,
-  bounded melt calls; documented MLT 7.22 hang.
+- CI: full e2e on Debian sid/MLT 7.42, Python 3.9/3.12/3.13 compatibility job,
+  bounded melt calls (`KD_MELT_TIMEOUT=90` in CI); documented MLT 7.22 hang.
+- CI e2e asserts the `all N checks passed` summary, warns when the check count
+  drops below 120 or MLT drifts from 7.42, and fails early when the MLT Qt
+  modules (`kdenlivetitle`, `qtblend`) are missing.
+- CI package job installs the sdist into a second venv and smoke-tests the
+  `kdenlive-mcp` command, in addition to the wheel venv test.
+- Release workflow supports manual dispatch and verifies that a tag run matches
+  `kdenlive_mcp.__version__` before building.
 
 ## [1.0.1] - 2026-11-22
 
